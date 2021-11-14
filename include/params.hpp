@@ -138,7 +138,7 @@ using DecomposedNoncePolynomialRAINTT = std::array<PolynomialRAINTT<P>, P::lₐ>
 template <class P>
 using TRLWE = std::array<Polynomial<P>, P::k + 1>;
 template <class P>
-using TRLWEMult = std::array<Polynomial<P>, 3>;
+using TRLWE3 = std::array<Polynomial<P>, 3>;
 template <class P>
 using TRLWEInFD = std::array<PolynomialInFD<P>, P::k + 1>;
 template <class P>
