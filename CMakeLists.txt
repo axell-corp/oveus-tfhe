@@ -90,6 +90,7 @@ option(USE_HEXL "Use Intel HEXL" OFF)
 option(ENABLE_TEST "Build tests" OFF)
 option(ENABLE_BENCHMARK "Build benchmarks" OFF)
 option(ENABLE_TUTORIAL "Build tutorial" OFF)
+option(ENABLE_AXELL "Use codes developed in Axell" ON)
 option(USE_PERF "Use Google Profiler" OFF)
 
 option(ENABLE_SHARED "Build as shared libraries" OFF)
@@ -236,6 +237,10 @@ if(USE_HEXL)
   add_subdirectory(thirdparties/hexl)
   # set(CMAKE_CXX_FLAGS "-march=native -O3 -g -funroll-loops -Wall -Wextra
   # -pedantic -Wno-sign-compare -mprefer-vector-width=512" )
+endif()
+
+if(ENABLE_AXELL)
+	add_compile_definitions(ENABLE_AXELL)
 endif()
 
 # For OpenMP

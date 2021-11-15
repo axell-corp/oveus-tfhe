@@ -21,3 +21,5 @@ if(gmp)
     add_compile_definitions(ENABLE_LSHTEST)
     target_link_libraries(INTorus gmp)
 endif()
+
+add_subdirectory(axell)
