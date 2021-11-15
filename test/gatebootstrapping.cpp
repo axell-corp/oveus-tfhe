@@ -37,22 +37,16 @@ int main()
     ProfilerStart("gb.prof");
 #endif
     for (int test = 0; test < num_test; test++) {
-        TFHEpp::GateBootstrapping<iksP, bkP, bkP::targetP::μ>(bootedtlwe[test],
-                                                              tlwe[test], ek);
-    }
-#ifdef USE_PERF
-    ProfilerStop();
-#endif
-
-    end = std::chrono::system_clock::now();
-    double elapsed =
-        std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
-            .count();
-    std::cout << elapsed / num_test << "ms" << std::endl;
-    for (int i = 0; i < num_test; i++) {
-        bool p2 = TFHEpp::tlweSymDecrypt<typename iksP::domainP>(
-            bootedtlwe[i], sk.key.get<typename iksP::domainP>());
-        assert(p[i] == p2);
+        bool p = binary(engine) > 0;
+        TFHEpp::TLWE<TFHEpp::lvl1param> tlwe =
+            TFHEpp::tlweSymEncrypt<TFHEpp::lvl1param>(
+                p ? TFHEpp::lvl1param::μ : -TFHEpp::lvl1param::μ,
+                TFHEpp::lvl1param::α, sk.key.lvl1);
+        TFHEpp::TLWE<TFHEpp::lvl1param> bootedtlwe;
+        TFHEpp::GateBootstrapping(bootedtlwe, tlwe, ek);
+        bool p2 =
+            TFHEpp::tlweSymDecrypt<TFHEpp::lvl1param>(bootedtlwe, sk.key.lvl1);
+        assert(p == p2);
     }
     std::cout << "Passed" << std::endl;
 }

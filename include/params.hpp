@@ -30,12 +30,7 @@ enum class ErrorDistribution { ModularGaussian, CenteredBinomial };
 #include "params/128bit.hpp"
 #endif
 
-#ifndef USE_DIFFERENT_BR_PARAM
-using cblvl2param = lvl2param;
-#endif
-#ifndef USE_DIFFERENT_AH_PARAM
-using cbAHlvl2param = AHlvl2param;
-#endif
+#include "./axell/mpparam.hpp"
 
 struct lvl01param {
     using domainP = lvl0param;
@@ -143,7 +138,7 @@ using DecomposedNoncePolynomialRAINTT = std::array<PolynomialRAINTT<P>, P::lₐ>
 template <class P>
 using TRLWE = std::array<Polynomial<P>, P::k + 1>;
 template <class P>
-using TRLWE3 = std::array<Polynomial<P>, 3>;
+using TRLWEMult = std::array<Polynomial<P>, 3>;
 template <class P>
 using TRLWEInFD = std::array<PolynomialInFD<P>, P::k + 1>;
 template <class P>
@@ -239,39 +234,22 @@ using relinKeyFFT = aligned_array<TRLWEInFD<P>, P::l * P::l̅>;
     fun(lvlhalfparam);                          \
     fun(lvl1param);                             \
     fun(lvl2param);                             \
-    fun(lvl3param);
+    fun(lvlMparam);
 #define TFHEPP_EXPLICIT_INSTANTIATION_TRLWE(fun) \
     fun(lvl1param);                              \
-    fun(lvl2param);
-#ifdef USE_DIFFERENT_AH_PARAM
-#define TFHEPP_EXPLICIT_INSTANTIATION_ANNIHILATE(fun) \
-    fun(AHlvl1param);                                 \
-    fun(AHlvl2param);                                 \
-    fun(cbAHlvl2param);
-#else
-#define TFHEPP_EXPLICIT_INSTANTIATION_ANNIHILATE(fun) \
-    fun(AHlvl1param);                                 \
-    fun(AHlvl2param);
-#endif
-#ifdef USE_DIFFERENT_BR_PARAM
+    fun(lvl2param);                              \
+    fun(lvlMparam);
 #define TFHEPP_EXPLICIT_INSTANTIATION_BLIND_ROTATE(fun) \
     fun(lvl01param);                                    \
     fun(lvl02param);                                    \
-    fun(lvlh2param);                                    \
-    fun(cblvl02param);                                  \
-    fun(cblvlh2param);
-#else
-#define TFHEPP_EXPLICIT_INSTANTIATION_BLIND_ROTATE(fun) \
-    fun(lvl01param);                                    \
-    fun(lvl02param);                                    \
-    fun(lvlh2param);
-#endif
+    fun(lvl0Mparam);
 #define TFHEPP_EXPLICIT_INSTANTIATION_KEY_SWITCH_TO_TLWE(fun) \
     fun(lvl10param);                                          \
-    fun(lvl1hparam);                                          \
+    fun(lvl11param);                                          \
     fun(lvl20param);                                          \
-    fun(lvl2hparam);                                          \
-    fun(lvl21param);
+    fun(lvl21param);                                          \
+    fun(lvl22param);                                          \
+    fun(lvlM0param);
 #define TFHEPP_EXPLICIT_INSTANTIATION_KEY_SWITCH_TO_TRLWE(fun) \
     fun(lvl11param);                                           \
     fun(lvl21param);                                           \
@@ -295,8 +273,4 @@ using relinKeyFFT = aligned_array<TRLWEInFD<P>, P::l * P::l̅>;
 #define TFHEPP_EXPLICIT_INSTANTIATION_CIRCUIT_BOOTSTRAPPING(fun) \
     fun(lvl10param, lvl02param, lvl21param);                     \
     fun(lvl10param, lvl02param, lvl22param);
-#define TFHEPP_EXPLICIT_INSTANTIATION_ANNIHILATE_CIRCUIT_BOOTSTRAPPING(fun) \
-    fun(lvl10param, cblvl02param, cbAHlvl2param);
-#define TFHEPP_EXPLICIT_INSTANTIATION_CIRCUIT_BOOTSTRAPPING_SUBIKS(fun) \
-    fun(lvl10param, lvl02param, lvl21param);
 }  // namespace TFHEpp

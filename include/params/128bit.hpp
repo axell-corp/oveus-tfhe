@@ -2,7 +2,6 @@
 
 #include <cmath>
 #include <cstdint>
-#include <limits>
 
 struct lvl0param {
     static constexpr int32_t key_value_max = 1;
@@ -32,11 +31,7 @@ struct lvlhalfparam {
         ErrorDistribution::ModularGaussian;
     static const inline double α = std::pow(2.0, -17);  // fresh noise
     using T = uint32_t;                                 // Torus representation
-    static constexpr T μ = 1U << (std::numeric_limits<T>::digits - 3);
-    static constexpr uint32_t plain_modulus = 32;
-    static constexpr double Δ =
-        static_cast<double>(1ULL << std::numeric_limits<T>::digits) /
-        plain_modulus;
+    static constexpr T μ = 1U << 29;
 };
 
 struct lvl1param {
@@ -209,16 +204,8 @@ struct lvl4param {
     static const inline double α = std::pow(2.0, -51);  // fresh noise
     using T = uint64_t;                                 // Torus representation
     static constexpr T μ = 1ULL << 61;
-    static constexpr uint32_t plain_modulusbit = 31;
-    static constexpr uint64_t plain_modulus = 1ULL << plain_modulusbit;
-    static constexpr double Δ = 1ULL << (64 - plain_modulusbit - 1);
-    // Double Decomposition (bivariate representation) parameters
-    // Trivial values (no actual second decomposition)
-    static constexpr std::uint32_t l̅ = 1;  // auxiliary decomposition levels
-    static constexpr std::uint32_t l̅ₐ = l̅;
-    static constexpr std::uint32_t B̅gbit =
-        std::numeric_limits<T>::digits;  // full coefficient width
-    static constexpr std::uint32_t B̅gₐbit = B̅gbit;
+    static constexpr uint32_t plain_modulus = 8;
+    static constexpr double Δ = μ;
 };
 
 // Key Switching parameters
@@ -244,11 +231,9 @@ struct lvl1hparam {
 };
 
 struct lvl11param {
-    static constexpr std::uint32_t t = 6;  // number of addition in keyswitching
+    static constexpr std::uint32_t t = 8;  // number of addition in keyswitching
     static constexpr std::uint32_t basebit =
-        4;  // how many bit should be encrypted in keyswitching key
-    static constexpr ErrorDistribution errordist =
-        ErrorDistribution::ModularGaussian;
+        2;  // how many bit should be encrypted in keyswitching key
     static const inline double α = lvl1param::α;  // key noise
     using domainP = lvl1param;
     using targetP = lvl1param;

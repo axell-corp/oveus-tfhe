@@ -1,4 +1,4 @@
-file(GLOB tfhe++_sources "*.cpp")
+file(GLOB_RECURSE tfhe++_sources "*.cpp")
 
 # Exclude spqlios-arithmetic processor by default
 if(NOT USE_SPQLIOS_ARITHMETIC)

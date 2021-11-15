@@ -1,4 +1,16 @@
-[![Test](https://github.com/virtualsecureplatform/TFHEpp/actions/workflows/test.yml/badge.svg)](https://github.com/virtualsecureplatform/TFHEpp/actions/workflows/test.yml)
+# oveus-tfhe
+This repository contains the TFHE library for oveus based on [TFHEpp](https://github.com/virtualsecureplatform/TFHEpp).
+Some performance and UX improvements are applied.
+The files in this repository are licensed under AGPLv3. For third parties' programs, see corresponding directories under /thirdparties.
+If you need the commercial license for our AGPLv3 parts, please contact to oveus@axell.co.jp
+
+**CAUTION:** TRADEMARKS INCLUDING THE NAME "oveus" ARE NOT LICENSED.
+
+## Patents
+This repository contains some codes implementing the contents of AXELL CORPORATION's patents.
+
+Below is the README for TFHEpp.
+
 # TFHEpp
 TFHEpp is a full scratched pure C++ version of TFHE. TFHEpp is slightly(about 10%) faster than the original [TFHE implementation](https://github.com/tfhe/tfhe). In addition to that, THFEpp supports [Circuit Bootstrapping](https://eprint.iacr.org/2018/421), [Programable Boootstrapping many LUT](https://eprint.iacr.org/2021/729), Partial Key([Klemsa's version](https://eprint.iacr.org/2021/634), [Zama's version](https://eprint.iacr.org/2023/979) . Named as subset key in the code), [Modified Chen's Packing](https://eprint.iacr.org/2024/1318) (We call it as annihilate key switching in our code), [mean compensation in rounding noises](https://eprint.iacr.org/2025/809), and [Double Decomposition](https://eprint.iacr.org/2023/771) (bivariate polynomial representation) with 128-bit Torus support. 
 We also include partial support for B/FV, written in include/bfv++.hpp. For the implementation of the Modified Chen's Packing, we also used the idea of [dividing TRLWE at each recursion](https://eprint.iacr.org/2025/1088), though I developed that independently. 

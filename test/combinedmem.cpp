@@ -119,7 +119,8 @@ int main()
     ek.emplacebkfft<TFHEpp::lvl02param>(*sk);
     ek.emplaceiksk<TFHEpp::lvl10param>(*sk);
     ek.emplaceiksk<TFHEpp::lvl20param>(*sk);
-    ek.emplaceprivksk4cb<TFHEpp::lvl21param>(*sk);
+    ek.emplaceprivksk<TFHEpp::lvl21param, 1>(*sk);
+    ek.emplaceprivksk<TFHEpp::lvl21param, 0>(*sk);
     vector<uint8_t> ramp(memsize / 2 * words);  // unit of memsize is byte(8bit)
     vector<uint8_t> romp(memsize / 2 * words);
     vector<
@@ -202,8 +203,10 @@ int main()
             start = chrono::system_clock::now();
             // Addres CB
             for (int i = 0; i < address_bit - 1; i++) {
-                CircuitBootstrappingWithInv<lvl10param, lvl02param, lvl21param>(
-                    (*bootedTGSW)[1][i], (*bootedTGSW)[0][i], encaddress[i], ek);
+                CircuitBootstrappingFFTwithInv<lvl10param, lvl02param,
+                                               lvl21param>((*bootedTGSW)[1][i],
+                                                           (*bootedTGSW)[0][i],
+                                                           encaddress[i], ek);
             }
 
             // Read
