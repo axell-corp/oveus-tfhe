@@ -121,7 +121,7 @@ else()
 endif()
 
 if(ENABLE_AXELL)
-	add_compile_definitions(ENABLE_AXELL)
+  add_compile_definitions(ENABLE_AXELL)
 endif()
 
 # For OpenMP
