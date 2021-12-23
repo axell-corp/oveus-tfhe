@@ -23,49 +23,17 @@ void tlweSymEncrypt(TLWE<P> &res, const typename P::T p, const double α,
 }
 
 template <class P>
-array<typename P::T, P::n + 1> tlweSymEncrypt(
-    const typename P::T p, const double α,
-    const array<typename P::T, P::n> &key);
+TLWE<P> tlweSymEncrypt(const typename P::T p, const double α,
+                       const array<typename P::T, P::n> &key);
 
 template <class P>
-void tlweSymEncrypt(TLWE<P> &res, const typename P::T p, const SecretKey &sk)
-{
-    tlweSymEncrypt<P>(res, p, sk.key.get<P>());
-}
+TLWE<P> tlweSymIntEncrypt(const typename P::T p, const double α,
+                          const array<typename P::T, P::n> &key);
 
-template <class P, uint plain_modulus = P::plain_modulus>
-void tlweSymIntEncrypt(TLWE<P> &res, const typename P::T p, const double α,
-                       const Key<P> &key)
-{
-    const double Δ = std::pow(2.0, std::numeric_limits<typename P::T>::digits) /
-                     plain_modulus;
-    tlweSymEncrypt<P>(res, static_cast<typename P::T>(p * Δ), α, key);
-}
-
-template <class P, uint plain_modulus = P::plain_modulus>
-void tlweSymIntEncrypt(TLWE<P> &res, const typename P::T p, const uint η,
-                       const Key<P> &key)
-{
-    constexpr double Δ =
-        std::pow(2.0, std::numeric_limits<typename P::T>::digits) /
-        plain_modulus;
-    tlweSymEncrypt<P>(res, static_cast<typename P::T>(p * Δ), η, key);
-}
-
-template <class P, uint plain_modulus = P::plain_modulus>
-void tlweSymIntEncrypt(TLWE<P> &res, const typename P::T p, const Key<P> &key)
-{
-    if constexpr (P::errordist == ErrorDistribution::ModularGaussian)
-        tlweSymIntEncrypt<P, plain_modulus>(res, p, P::α, key);
-    else
-        tlweSymIntEncrypt<P, plain_modulus>(res, p, P::η, key);
-}
-
-template <class P, uint plain_modulus = P::plain_modulus>
-void tlweSymIntEncrypt(TLWE<P> &res, const typename P::T p, const SecretKey &sk)
-{
-    tlweSymIntEncrypt<P, plain_modulus>(res, p, sk.key.get<P>());
-}
+template <class P>
+bool tlweSymDecrypt(const TLWE<P> &c, const Key<P> &key);
+template <class P>
+typename P::T tlweSymIntDecrypt(const TLWE<P> &c, const Key<P> &key);
 
 template <class P = lvl1param>
 void bootsSymEncrypt(std::vector<TLWE<P>> &c, const std::vector<uint8_t> &p,

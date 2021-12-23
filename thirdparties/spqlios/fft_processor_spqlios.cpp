@@ -4,7 +4,6 @@
 
 #include<params.hpp>
 
-#include "x86.h"
 #include "fft_processor_spqlios.h"
 
 using namespace std;
@@ -574,4 +573,3 @@ FFT_Processor_Spqlios::~FFT_Processor_Spqlios() {
 
 thread_local FFT_Processor_Spqlios fftplvl1(TFHEpp::lvl1param::n);
 thread_local FFT_Processor_Spqlios fftplvl2(TFHEpp::lvl2param::n);
-thread_local FFT_Processor_Spqlios fftplvl3(TFHEpp::lvl3param::n);

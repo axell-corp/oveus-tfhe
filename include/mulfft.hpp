@@ -1,33 +1,11 @@
 #pragma once
 
-#include <memory>
-
-#if defined(USE_AVX512) || defined(__AVX2__)
-#include <immintrin.h>
-#endif
-
-#include "INTorus.hpp"
 #ifdef USE_FFTW3
 #include <fft_processor_fftw.h>
-#elif USE_MKL
-#include <fft_processor_mkl.hpp>
 #elif USE_SPQLIOX_AARCH64
 #include <fft_processor_spqliox_aarch64.h>
-#elif USE_CONCRETE_FFT
-#include <fft_processor_concrete.hpp>
-#elif USE_SPQLIOS_ARITHMETIC
-#include <fft_processor_spqlios_arithmetic.h>
-#elif USE_SPQLIOS_INTL
-#include <fft_processor_spqlios_intl.h>
 #else
 #include <fft_processor_spqlios.h>
-#endif
-#ifdef USE_HEXL
-#include "hexl/hexl.hpp"
-#endif
-
-#ifdef USE_INTERLEAVED_FORMAT
-#include <complex>
 #endif
 
 #include "cuhe++.hpp"

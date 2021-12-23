@@ -19,15 +19,11 @@ private:
     std::vector<std::complex<double>> twist;
     fftw_plan plan_forward;
     fftw_plan plan_backward;
-    fftw_complex *inbuf;
-    fftw_complex *outbuf;
 
 public:
     FFT_Processor_FFTW(const int32_t N);
 
     void execute_reverse_int(double *res, const int32_t *a);
-
-    void execute_reverse_uint(double *res, const uint32_t *a);
 
     void execute_reverse_torus32(double *res, const uint32_t *a);
 
@@ -39,9 +35,6 @@ public:
     void execute_reverse_torus64(double *res, const uint64_t *a);
 
     void execute_direct_torus64(uint64_t *res, const double *a);
-
-    void execute_direct_torus64_rescale(uint64_t *res, const double *a,
-                                        const double Δ);
 
     ~FFT_Processor_FFTW();
 };
