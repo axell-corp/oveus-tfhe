@@ -16,10 +16,4 @@ endif()
 
 set(SPQLIOS_HEADERS fft_processor_spqlios.h x86.h)
 
-if(ENABLE_SHARED)
-  add_library(spqlios SHARED ${SRCS_FMA} ${SPQLIOS_HEADERS})
-else()
-  add_library(spqlios STATIC ${SRCS_FMA} ${SPQLIOS_HEADERS})
-endif()
-
 target_include_directories(spqlios PUBLIC ${PROJECT_SOURCE_DIR}/include)
