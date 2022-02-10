@@ -107,9 +107,7 @@ struct portablelvl10param {
     double α;     // key noise
 
     portablelvl10param()
-        : t(lvl10param::t),
-          basebit(lvl10param::basebit),
-          α(lvl10param::targetP::α)
+        : t(lvl10param::t), basebit(lvl10param::basebit), α(lvl10param::α)
     {
     }
 
@@ -132,9 +130,7 @@ struct portablelvl20param {
     double α;     // key noise
 
     portablelvl20param()
-        : t(lvl20param::t),
-          basebit(lvl20param::basebit),
-          α(lvl20param::targetP::α)
+        : t(lvl20param::t), basebit(lvl20param::basebit), α(lvl20param::α)
     {
     }
 
@@ -155,7 +151,10 @@ struct portablelvl21param {
     std::uint32_t
         basebit;  // how many bit should be encrypted in keyswitching key
 
-    portablelvl21param() : t(lvl21param::t), basebit(lvl21param::basebit) {}
+    portablelvl21param()
+        : t(lvl21param::t), basebit(lvl21param::basebit), α(lvl21param::α)
+    {
+    }
 
     template <class Archive>
     void serialize(Archive& archive)
@@ -176,8 +175,7 @@ struct portablelvl22param {
     // double α;     // key noise
 
     portablelvl22param()
-        : t(lvl22param::t),
-          basebit(lvl22param::basebit)  //, α(lvl22param::targetP::α)
+        : t(lvl22param::t), basebit(lvl22param::basebit), α(lvl22param::α)
     {
     }
 
