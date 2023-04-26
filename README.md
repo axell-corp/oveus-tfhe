@@ -1,3 +1,4 @@
+[![Test](https://github.com/axell-corp/oveus-tfhe/actions/workflows/test.yml/badge.svg)](https://github.com/axell-corp/oveus-tfhe/actions/workflows/test.yml)
 # oveus-tfhe
 This repository contains the TFHE library for oveus based on [TFHEpp](https://github.com/virtualsecureplatform/TFHEpp).
 Some performance improvements described in [this paper](https://doi.org/10.1145/3474366.3486927) and some UX improvements are applied.
