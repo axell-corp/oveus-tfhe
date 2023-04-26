@@ -1,10 +1,23 @@
 #pragma once
 
 #include "axell/gate.hpp"
+#include "axell/mpparam.hpp"
 #include "cloudkey.hpp"
 
 namespace TFHEpp {
-using namespace std;
+template <class P, int casign, int cbsign, uint64_t offset>
+inline void HomGate(TLWE<P> &res, const TLWE<P> &ca, const TLWE<P> &cb,
+                    const EvalKey &ek)
+{
+    for (int i = 0; i <= P::k * P::n; i++)
+        res[i] = casign * ca[i] + cbsign * cb[i];
+    res[P::k * P::n] += offset;
+    if constexpr (std::is_same_v<P, lvlMparam>) {
+        GateBootstrapping<lvlM0param,lvl0Mparam,lvlMparam::μ>(res, res, ek);
+    }else{
+        GateBootstrapping(res, res, ek);
+    }
+}
 template <class P = lvl1param>
 void HomCONSTANTONE(TLWE<P> &res);
 template <class P = lvl1param>
