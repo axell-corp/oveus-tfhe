@@ -1,6 +1,7 @@
 #pragma once
 
 #include "axell/gate.hpp"
+#include "axell/mpparam.hpp"
 #include "cloudkey.hpp"
 
 namespace TFHEpp {
@@ -11,7 +12,11 @@ inline void HomGate(TLWE<P> &res, const TLWE<P> &ca, const TLWE<P> &cb,
     for (int i = 0; i <= P::k * P::n; i++)
         res[i] = casign * ca[i] + cbsign * cb[i];
     res[P::k * P::n] += offset;
-    GateBootstrapping(res, res, ek);
+    if constexpr (std::is_same_v<P, lvlMparam>) {
+        GateBootstrapping<lvlM0param,lvl0Mparam,lvlMparam::μ>(res, res, ek);
+    }else{
+        GateBootstrapping(res, res, ek);
+    }
 }
 template <class P = lvl1param>
 void HomCONSTANTONE(TLWE<P> &res);
