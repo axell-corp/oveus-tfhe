@@ -21,7 +21,7 @@ cd $SCRIPT_DIR
 ./show_info.sh
 
 TEST_BINARIES=`find . -maxdepth 2 -perm -111 -type f`
-IGNORED_BINARIES=('tfhe_integer')
+IGNORED_BINARIES=('./axell/tfhe_integer')
 for TEST_BINARY in $TEST_BINARIES
 do
     RES=`contains $TEST_BINARY "${IGNORED_BINARIES[*]}"`
