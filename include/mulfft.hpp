@@ -21,17 +21,21 @@
 namespace TFHEpp {
 
 inline const std::unique_ptr<
-    const std::array<std::array<cuHEpp::INTorus, TFHEpp::lvl1param::n>, 2>>
-    ntttwistlvl1 = cuHEpp::TwistGen<TFHEpp::lvl1param::nbit>();
+    const std::array<std::array<cuHEpp::INTorus, lvl1param::n>, 2>>
+    ntttwistlvl1 = cuHEpp::TwistGen<lvl1param::nbit>();
 inline const std::unique_ptr<
-    const std::array<std::array<cuHEpp::INTorus, TFHEpp::lvl1param::n>, 2>>
-    ntttablelvl1 = cuHEpp::TableGen<TFHEpp::lvl1param::nbit>();
+    const std::array<std::array<cuHEpp::INTorus, lvl1param::n>, 2>>
+    ntttablelvl1 = cuHEpp::TableGen<lvl1param::nbit>();
 inline const std::unique_ptr<
-    const std::array<std::array<cuHEpp::INTorus, TFHEpp::lvl2param::n>, 2>>
-    ntttwistlvl2 = cuHEpp::TwistGen<TFHEpp::lvl2param::nbit>();
+    const std::array<std::array<cuHEpp::INTorus, lvl2param::n>, 2>>
+    ntttwistlvl2 = cuHEpp::TwistGen<lvl2param::nbit>();
 inline const std::unique_ptr<
-    const std::array<std::array<cuHEpp::INTorus, TFHEpp::lvl2param::n>, 2>>
-    ntttablelvl2 = cuHEpp::TableGen<TFHEpp::lvl2param::nbit>();
+    const std::array<std::array<cuHEpp::INTorus, lvl2param::n>, 2>>
+    ntttablelvl2 = cuHEpp::TableGen<lvl2param::nbit>();
+inline const std::unique_ptr<std::array<std::array<raintt::SWord, lvl1param::n>, 2>> 
+    raintttwist = raintt::TwistGen<lvl1param::nbit,3>();
+inline const std::unique_ptr<std::array<std::array<std::array<raintt::SWord, lvl1param::n>, 2>, 2>> 
+    raintttable = raintt::TableGen<lvl1param::nbit>();
 #ifdef USE_HEXL
 // Biggest prime number less than 2^30 and staisfies 1 mod 2N.
 constexpr uint64_t lvl1P = 1073707009;
@@ -43,21 +47,22 @@ inline void TwistNTT(Polynomial<P> &res, PolynomialNTT<P> &a)
     if constexpr (std::is_same_v<P, TFHEpp::lvl1param> || std::is_same_v<P, TFHEpp::lvlMparam>)
 #ifdef USE_HEXL
     {
-        std::array<uint64_t, TFHEpp::lvl1param::n> temp;
-        static intel::hexl::NTT nttlvl1(TFHEpp::lvl1param::n, lvl1P);
+        std::array<uint64_t, lvl1param::n> temp;
+        static intel::hexl::NTT nttlvl1(lvl1param::n, lvl1P);
         nttlvl1.ComputeInverse(temp.data(), &(a[0].value), 1, 1);
-        for (int i = 0; i < TFHEpp::lvl1param::n; i++)
+        for (int i = 0; i < lvl1param::n; i++)
             res[i] = (temp[i] << 32) / lvl1P;
     }
 #else
-        cuHEpp::TwistNTT<typename TFHEpp::lvl1param::T,
-                         TFHEpp::lvl1param::nbit>(res, a, (*ntttablelvl1)[0],
+        cuHEpp::TwistNTT<typename lvl1param::T,
+                         lvl1param::nbit>(res, a, (*ntttablelvl1)[0],
                                                   (*ntttwistlvl1)[0]);
 #endif
-    else if constexpr (std::is_same_v<typename P::T, uint64_t>)
-        cuHEpp::TwistNTT<typename TFHEpp::lvl2param::T,
-                         TFHEpp::lvl2param::nbit>(res, a, (*ntttablelvl2)[0],
+    else if constexpr (std::is_same_v<typename P::T, uint64_t>) {
+        cuHEpp::TwistNTT<typename lvl2param::T,
+                         lvl2param::nbit>(res, a, (*ntttablelvl2)[0],
                                                   (*ntttwistlvl2)[0]);
+    }
     else
         static_assert(false_v<typename P::T>, "Undefined TwistNTT!");
 }
@@ -94,10 +99,10 @@ inline void TwistINTT(PolynomialNTT<P> &res, const Polynomial<P> &a)
     if constexpr (std::is_same_v<P, TFHEpp::lvl1param> || std::is_same_v<P, TFHEpp::lvlMparam>)
 #ifdef USE_HEXL
     {
-        std::array<uint64_t, TFHEpp::lvl1param::n> temp;
-        for (int i = 0; i < TFHEpp::lvl1param::n; i++)
+        std::array<uint64_t, lvl1param::n> temp;
+        for (int i = 0; i < lvl1param::n; i++)
             temp[i] = (lvl1P * static_cast<uint64_t>(a[i])) >> 32;
-        static intel::hexl::NTT nttlvl1(TFHEpp::lvl1param::n, lvl1P);
+        static intel::hexl::NTT nttlvl1(lvl1param::n, lvl1P);
         nttlvl1.ComputeForward(&(res[0].value), temp.data(), 1, 1);
     }
 #else
@@ -105,9 +110,8 @@ inline void TwistINTT(PolynomialNTT<P> &res, const Polynomial<P> &a)
                                                   (*ntttwistlvl1)[1]);
 #endif
     else if constexpr (std::is_same_v<typename P::T, uint64_t>)
-        cuHEpp::TwistINTT<typename TFHEpp::lvl2param::T,
-                          TFHEpp::lvl2param::nbit>(res, a, (*ntttablelvl2)[1],
-                                                   (*ntttwistlvl2)[1]);
+        cuHEpp::TwistINTT<typename P::T, P::nbit>(res, a, (*ntttablelvl2)[1],
+                                                  (*ntttwistlvl2)[1]);
     else
         static_assert(false_v<typename P::T>, "Undefined TwistINTT!");
 }
@@ -173,24 +177,28 @@ inline void PolyMul(Polynomial<P> &res, const Polynomial<P> &a,
         MulInFD<P::n>(ffta, ffta, fftb);
         TwistFFT<P>(res, ffta);
     }
-    else if constexpr (std::is_same_v<typename P::T, uint64_t>) {
-        for (int i = 0; i < P::n; i++) {
-            typename P::T ri = 0;
-            for (int j = 0; j <= i; j++)
-                ri +=
-                    static_cast<typename std::make_signed<typename P::T>::type>(
-                        a[j]) *
-                    b[i - j];
-            for (int j = i + 1; j < P::n; j++)
-                ri -=
-                    static_cast<typename std::make_signed<typename P::T>::type>(
-                        a[j]) *
-                    b[P::n + i - j];
-            res[i] = ri;
-        }
+    else{
+        // Naieve
+        // for (int i = 0; i < P::n; i++) {
+        //     typename P::T ri = 0;
+        //     for (int j = 0; j <= i; j++)
+        //         ri +=
+        //             static_cast<typename std::make_signed<typename P::T>::type>(
+        //                 a[j]) *
+        //             b[i - j];
+        //     for (int j = i + 1; j < P::n; j++)
+        //         ri -=
+        //             static_cast<typename std::make_signed<typename P::T>::type>(
+        //                 a[j]) *
+        //             b[P::n + i - j];
+        //     res[i] = ri;
+        // }
+        PolynomialNTT<P> ntta,nttb;
+        TwistINTT<P>(ntta, a);
+        TwistINTT<P>(nttb, b);
+        for(int i = 0; i < P::n; i++) ntta[i] *= nttb[i];
+        TwistNTT<P>(res, ntta);
     }
-    else
-        static_assert(false_v<typename P::T>, "Undefined PolyMul!");
 }
 
 template <class P>
@@ -261,14 +269,15 @@ std::unique_ptr<std::array<PolynomialNTT<P>, 2 * P::n>> XaittGenNTT()
     return xaitt;
 }
 
-#ifdef USE_TERNARY
+#if defined(USE_TERNARY) || defined(USE_KEY_BUNDLE)
 alignas(64) static const std::unique_ptr<
     const std::array<PolynomialInFD<lvl1param>, 2 *lvl1param::n>> xaittlvl1 =
     XaittGen<lvl1param>();
 alignas(64) static const std::unique_ptr<
     const std::array<PolynomialInFD<lvl2param>, 2 *lvl2param::n>> xaittlvl2 =
     XaittGen<lvl2param>();
-
+#endif
+#ifdef USE_TERNARY
 template <class P>
 inline void PolynomialMulByXaiMinusOneInFD(PolynomialInFD<P> &res,
                                            const PolynomialInFD<P> &poly,

@@ -2,16 +2,14 @@
 #include <utils.hpp>
 
 namespace TFHEpp {
-using namespace std;
-
 lweKey::lweKey()
 {
-    uniform_int_distribution<int32_t> lvl0gen(lvl0param::key_value_min,
-                                              lvl0param::key_value_max);
-    uniform_int_distribution<int32_t> lvl1gen(lvl1param::key_value_min,
-                                              lvl1param::key_value_max);
-    uniform_int_distribution<int32_t> lvl2gen(lvl2param::key_value_min,
-                                              lvl2param::key_value_max);
+    std::uniform_int_distribution<int32_t> lvl0gen(lvl0param::key_value_min,
+                                                   lvl0param::key_value_max);
+    std::uniform_int_distribution<int32_t> lvl1gen(lvl1param::key_value_min,
+                                                   lvl1param::key_value_max);
+    std::uniform_int_distribution<int32_t> lvl2gen(lvl2param::key_value_min,
+                                                   lvl2param::key_value_max);
     for (typename lvl0param::T &i : lvl0) i = lvl0gen(generator);
     for (typename lvl1param::T &i : lvl1) i = lvl1gen(generator);
     for (typename lvl2param::T &i : lvl2) i = lvl2gen(generator);
