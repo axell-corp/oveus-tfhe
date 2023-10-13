@@ -19,100 +19,14 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
       with:
-        submodules: recursive
-    - name: build and test
-      run: |
-        cmake . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_TEST=ON
-        cd build
-        ninja
-        test/test.sh
-  ubuntu-2404:
-    name: ubuntu-2404
-    runs-on: Ubuntu-latest
-    container:
-      image: ubuntu:24.04
-    steps:
-    - name: Install libraries
-      run: |
-        apt-get update
-        apt-get upgrade -y
-        apt-get install -y git build-essential g++ libomp-dev cmake git ninja-build
-    - name: Checkout
-      uses: actions/checkout@v4
+        file: Dockerfile
+        tags: oveus-tfhe-2204
+        push: false
+        load: true
+        cache-from: type=gha,scope=buildx-${{ github.workflow }}-${{ github.job }}
+        cache-to: type=gha,mode=max,scope=buildx-${{ github.workflow }}-${{ github.job }}
+
+    - uses: addnab/docker-run-action@v3
       with:
-        submodules: recursive
-    - name: build and test
-      run: |
-        cmake . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_TEST=ON
-        cd build
-        ninja
-        test/test.sh
-  ubuntu-2404-concrete:
-    name: ubuntu-2404-concrete
-    runs-on: Ubuntu-latest
-    container:
-      image: ubuntu:24.04
-    steps:
-    - name: Install libraries
-      run: |
-        apt-get update
-        apt-get upgrade -y
-        apt-get install -y git build-essential g++ libomp-dev cmake git ninja-build
-    - name: Checkout
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-    - name: build and test
-      run: |
-        cmake . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_TEST=ON -DUSE_CONCRETE=ON
-        cd build
-        ninja
-        test/test.sh
-  ubuntu-2404-tutorial:
-    name: ubuntu-2404-tutorial
-    runs-on: Ubuntu-latest
-    container:
-      image: ubuntu:24.04
-    steps:
-    - name: Install libraries
-      run: |
-        apt-get update
-        apt-get upgrade -y
-        apt-get install -y git build-essential g++ libomp-dev cmake git ninja-build
-    - name: Checkout
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-    - name: build and run tutorial
-      run: |
-        cmake . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_TUTORIAL=ON
-        cd build
-        ninja
-        echo "12345" | ./tutorial/client
-        echo "54321" | ./tutorial/cloud
-        ./tutorial/verify
-  ubuntu-2404-clang:
-    name: ubuntu-2404-clang
-    runs-on: Ubuntu-latest
-    container:
-      image: ubuntu:24.04
-    steps:
-    - name: Install libraries
-      run: |
-        apt-get update
-        apt-get upgrade -y
-        apt-get install -y git build-essential g++ libomp-dev ninja-build clang lld wget
-        wget https://github.com/Kitware/CMake/releases/download/v4.1.2/cmake-4.1.2-linux-x86_64.tar.gz
-        tar -xzvf cmake*
-        rm cmake*.tar.gz
-        mv cmake* /cmake-binary
-    - name: Checkout
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-    - name: build and test
-      run: |
-        /cmake-binary/bin/cmake . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang -DCMAKE_LINKER_TYPE=LLD -DENABLE_TEST=ON
-        cd build
-        ninja
-        test/test.sh
+        image: oveus-tfhe-2204
+        run: /TFHEpp/build/test/test.sh 
