@@ -8,10 +8,7 @@
 
 namespace TFHEpp {
 
-enum class ErrorDistribution{
-    ModularGaussian,
-    CenteredBinomial
-};
+enum class ErrorDistribution { ModularGaussian, CenteredBinomial };
 
 // Use old 80bit security parameters. It is faster, but not recommended.
 #if defined(USE_80BIT_SECURITY)
@@ -73,7 +70,6 @@ template <class P>
 using DecomposedPolynomialNTT = std::array<PolynomialNTT<P>, P::l>;
 template <class P>
 using DecomposedPolynomialRAINTT = std::array<PolynomialRAINTT<P>, P::l>;
-
 
 template <class P>
 using TRLWE = std::array<Polynomial<P>, P::k + 1>;
@@ -174,15 +170,17 @@ using relinKeyFFT = std::array<TRLWEInFD<P>, P::l>;
     fun(lvl0Mparam);
 #define TFHEPP_EXPLICIT_INSTANTIATION_KEY_SWITCH_TO_TLWE(fun) \
     fun(lvl10param);                                          \
-    fun(lvl11param);                                          \
     fun(lvl20param);                                          \
     fun(lvl21param);                                          \
-    fun(lvl22param);                                          \
     fun(lvlM0param);
 #define TFHEPP_EXPLICIT_INSTANTIATION_KEY_SWITCH_TO_TRLWE(fun) \
     fun(lvl11param);                                           \
     fun(lvl21param);                                           \
     fun(lvl22param);
+#define TFHEPP_EXPLICIT_INSTANTIATION_SUBSET_KEY_SWITCH_TO_TLWE(fun) \
+    fun(lvl21param);
+#define TFHEPP_EXPLICIT_INSTANTIATION_SUBSET_KEY_SWITCH_TO_TRLWE(fun) \
+    fun(lvl21param);
 #define TFHEPP_EXPLICIT_INSTANTIATION_GATE_IKSBR(fun) \
     fun(lvlM0param, lvl0Mparam, lvlMparam::μ);         \
     fun(lvl10param, lvl01param, lvl1param::μ);

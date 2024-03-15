@@ -23,6 +23,25 @@ static thread_local std::random_device generator;
 template <typename T>
 constexpr bool false_v = false;
 
+// https://qiita.com/negi-drums/items/a527c05050781a5af523
+template <typename T>
+concept hasq = requires
+{
+    T::q;
+};
+
+template <typename T>
+concept hasqbit = requires
+{
+    T::qbit;
+};
+
+// Double to Torus(32bit fixed-point number)
+inline uint16_t dtot16(double d)
+{
+    return int16_t(int64_t((d - int64_t(d)) * (1LL << 16)));
+}
+
 // Double to Torus(32bit fixed-point number)
 inline uint32_t dtot32(double d)
 {
@@ -33,7 +52,13 @@ inline uint32_t dtot32(double d)
 template <class P>
 inline typename P::T ModularGaussian(typename P::T center, double stdev)
 {
-    if constexpr (std::is_same_v<typename P::T, uint32_t>) {
+    if constexpr (std::is_same_v<typename P::T, uint16_t>) {
+        // 16bit fixed-point number version
+        std::normal_distribution<double> distribution(0., stdev);
+        double err = distribution(generator);
+        return center + dtot16(err);
+    }
+    else if constexpr (std::is_same_v<typename P::T, uint32_t>) {
         // 32bit fixed-point number version
         std::normal_distribution<double> distribution(0., stdev);
         double err = distribution(generator);
@@ -51,10 +76,23 @@ inline typename P::T ModularGaussian(typename P::T center, double stdev)
         static_assert(false_v<typename P::T>, "Undefined Modular Gaussian!");
 }
 
-template<class P>
-inline typename P::T CenteredBinomial(uint η){
-    std::binomial_distribution<typename P::T> distribution(2*η,0.5);
-    return distribution(generator) - η;
+template <class P>
+inline typename P::T CenteredBinomial(uint η)
+{
+    static uint64_t buf;
+    static uint_fast8_t count = 64;
+    typename P::T acc = 0;
+    std::uniform_int_distribution<uint64_t> dist(
+        0, std::numeric_limits<uint64_t>::max());
+    for (int i = 0; i < 2 * η; i++) {
+        if (count >= 64) {
+            buf = dist(generator);
+        }
+        acc += buf & 1;
+        buf >>= 1;
+        count++;
+    }
+    return acc - η;
 }
 
 // https://stackoverflow.com/questions/21191307/minimum-number-of-bits-to-represent-a-given-int

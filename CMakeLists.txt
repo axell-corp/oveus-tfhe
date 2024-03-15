@@ -1,9 +1,15 @@
 cmake_minimum_required(VERSION 3.16)
 project(tfhe++ CXX)
 set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_FLAGS
-    "-march=native -O3 -g -flto -funroll-loops -Wall -Wextra -pedantic -Wno-sign-compare"
-)
+option(DEBUG "Debug mode" OFF)
+if(DEBUG)
+  set(CMAKE_CXX_FLAGS
+      "-march=native -g -Wall -Wextra -pedantic -Wno-sign-compare")
+else()
+  set(CMAKE_CXX_FLAGS
+      "-march=native -O3 -g -flto -funroll-loops -Wall -Wextra -pedantic -Wno-sign-compare"
+  )
+endif()
 
 option(USE_80BIT_SECURITY "Use 80bit security parameter(faster)" OFF)
 option(USE_CGGI19 "Use the parameter set proposed in CGGI19" OFF)
@@ -73,6 +79,10 @@ if(USE_FFTW3)
 elseif(USE_SPQLIOX_AARCH64)
   add_compile_definitions(USE_SPQLIOX_AARCH64)
   add_subdirectory(thirdparties/spqliox_aarch64)
+  # Check if the platform is macOS and the architecture is ARM64
+  if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
+    include_directories(/opt/homebrew/include)
+  endif()
 else()
   add_subdirectory(thirdparties/spqlios)
 endif()

@@ -18,7 +18,7 @@ TFHEpp depends on AVX2 because we use SPQLIOS FMA. If you want run TFHEpp withou
 
 # Supported Compiler
 
-This code includes utf-8 identifiers like α and using `extern template`. Therefore, GCC10 or later are primarily supported compilers. GCC9 is not supported because of the lack of utf-8 support. Clang compilers are not supported because it seems to be not workable with `extern template` because of the mismatch of the name mangling.
+This code includes utf-8 identifiers like α, using `extern template`, and std::make_unique_for_overwrite. Therefore, GCC11 or later and Clang16 or later are primarily supported compilers. 
 
 # Parameter
 The default parameter is 128-bit security. Please add -DUSE_80BIT_SECURITY=ON to use a faster but less secure parameter.
@@ -52,13 +52,13 @@ This is the AVX512 version of SPQLIOS developed in [MOSFHET](https://github.com/
 Intel MKL is the library provided by Intel and including FFTW compatible interface for FFT.
 We assume to install MKL by [this procedure](https://www.intel.com/content/www/us/en/developer/articles/guide/installing-free-libraries-and-python-apt-repo.html) and already ran `source /opt/intel/mkl/bin/mklvars.sh`.
 
-Add `-DUSE_MKL` to the compile option to use MKL
+Add `-DUSE_MKL` to the CMake option to use MKL
 
 ## spqliox_aarch64
 spqliox_aarch64 is the FFT library for aarch64 forked from SPQLIOS.
 This is slightly faster than FFTW3(average 1ms).
 This library requires [xbyak_aarch64](https://github.com/fujitsu/xbyak_aarch64), and
-to use this library, add `-DUSE_SPQLIOX_AARCH64=on` to the compile option.
+to use this library, add `-DUSE_SPQLIOX_AARCH64=on` to the CMake option.
 
 <center>
 
@@ -67,6 +67,11 @@ to use this library, add `-DUSE_SPQLIOX_AARCH64=on` to the compile option.
 | 15.801ms | 14.368ms        |
 
 </center>
+
+## HEXL
+
+[HEXL](https://github.com/intel/hexl.git) is the NTT library optimized for AVX512. 
+To use this library, add `-DUSE_HEXL=on` to the CMake option.
 
 # Speed Test
 

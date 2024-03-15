@@ -6,7 +6,7 @@
 
 int main()
 {
-    constexpr uint32_t num_test = 10;
+    constexpr uint32_t num_test = 100;
     std::random_device seed_gen;
     std::default_random_engine engine(seed_gen());
     std::uniform_int_distribution<uint32_t> binary(0, 1);
@@ -16,10 +16,10 @@ int main()
     TFHEpp::SecretKey sk;
     std::unique_ptr<TFHEpp::BootstrappingKeyRAINTT<bkP>> bk;
     bk = std::make_unique<TFHEpp::BootstrappingKeyRAINTT<bkP>>();
-    TFHEpp::bkrainttgen<TFHEpp::lvl01param>(*bk,sk);
+    TFHEpp::bkrainttgen<TFHEpp::lvl01param>(*bk, sk);
     std::array<TFHEpp::TLWE<typename bkP::domainP>, num_test> tlwe;
     std::array<TFHEpp::TLWE<typename bkP::targetP>, num_test> bootedtlwe;
-    
+
     std::array<bool, num_test> p;
     for (int i = 0; i < num_test; i++) p[i] = binary(engine) > 0;
     for (int i = 0; i < num_test; i++)
@@ -32,7 +32,8 @@ int main()
 
     for (int test = 0; test < num_test; test++) {
         TFHEpp::GateBootstrappingTLWE2TLWERAINTT<bkP>(
-            bootedtlwe[test], tlwe[test], *bk, TFHEpp::μpolygen<typename bkP::targetP, bkP::targetP::μ>());
+            bootedtlwe[test], tlwe[test], *bk,
+            TFHEpp::μpolygen<typename bkP::targetP, bkP::targetP::μ>());
     }
 
     end = std::chrono::system_clock::now();
