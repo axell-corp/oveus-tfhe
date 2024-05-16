@@ -155,7 +155,7 @@ void RunTest()
     vector<TLWE<P>> cres(kNumTests);
     vector<TLWE<P>> c(3 * kNumTests);
 
-    if constexpr (std::is_same_v<P, lvl0param> || std::is_same_v<P, lvlMparam>){
+    if constexpr (std::is_same_v<P, lvl0param>){
         cout << "lvl0param" << endl;
         Test<P>("NOT", TFHEpp::HomNOT<P>, NotChegk, p, cres, c, kNumTests, *sk,
                 ek);
@@ -188,7 +188,7 @@ void RunTest()
         Test<P>("ConstantOne", TFHEpp::HomCONSTANTONE<P>, ConstantOneChegk, p,
                 cres, c, kNumTests, *sk, ek);
     }
-    else if constexpr (std::is_same_v<P, lvl1param>) {
+    else if constexpr (std::is_same_v<P, lvl1param> || std::is_same_v<P, lvlMparam>) {
         cout << "lvl1param" << endl;
         Test<P>("NOT", TFHEpp::HomNOT<P>, NotChegk, p, cres, c, kNumTests, *sk,
                 ek);

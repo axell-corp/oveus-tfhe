@@ -78,7 +78,7 @@ struct lvlMparam {
     static const inline double α = std::pow(2.0, -25);
     using T = uint32_t;
     // static constexpr T μ = 0x15555555;
-    static constexpr T μ =
+    static constexpr std::make_signed_t<T> μ =
         (1ULL << std::numeric_limits<typename lvlMparam::T>::digits) / 12;
     // dummy
     static constexpr uint32_t plain_modulus = 2;

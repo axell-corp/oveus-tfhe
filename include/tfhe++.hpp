@@ -14,6 +14,7 @@
 #include "externs/trlwe.hpp"
 #include "gate.hpp"
 #include "gatebootstrapping.hpp"
+#include "homdecomp.hpp"
 #include "io-packet.hpp"
 #include "key.hpp"
 #include "keyswitch.hpp"
