@@ -240,14 +240,15 @@ void HomMUX(TLWE<P> &res, const TLWE<P> &cs, const TLWE<P> &c1,
     for (int i = 0; i <= P::k * P::n; i++) res[i] = -cs[i] + c0[i];
     temp[P::k * P::n] -= P::μ;
     res[P::k * P::n] -= P::μ;
-    if constexpr (std::is_same_v<P, lvl1param> || std::is_same_v<P, lvlMparam>) {
+    if constexpr (std::is_same_v<P, lvl1param> ||
+                  std::is_same_v<P, lvlMparam>) {
         TLWE<lvl0param> and1, and0;
         IdentityKeySwitch<lvl10param>(and1, temp, *ek.iksklvl10);
         IdentityKeySwitch<lvl10param>(and0, res, *ek.iksklvl10);
-        GateBootstrappingTLWE2TLWEFFT<lvl01param>(
-            temp, and1, *ek.bkfftlvl01, μpolygen<lvl1param, P::μ>());
-        GateBootstrappingTLWE2TLWEFFT<lvl01param>(
-            res, and0, *ek.bkfftlvl01, μpolygen<lvl1param, P::μ>());
+        GateBootstrappingTLWE2TLWEFFT<lvl01param>(temp, and1, *ek.bkfftlvl01,
+                                                  μpolygen<lvl1param, P::μ>());
+        GateBootstrappingTLWE2TLWEFFT<lvl01param>(res, and0, *ek.bkfftlvl01,
+                                                  μpolygen<lvl1param, P::μ>());
         for (int i = 0; i <= P::k * P::n; i++) res[i] += temp[i];
         res[P::k * P::n] += P::μ;
     }
@@ -261,7 +262,8 @@ void HomMUX(TLWE<P> &res, const TLWE<P> &cs, const TLWE<P> &c1,
             and0[i] += and1[i];
         IdentityKeySwitch<lvl10param>(res, and0, *ek.iksklvl10);
         res[P::k * P::n] += P::μ;
-    }else{
+    }
+    else {
         static_assert(false_v<typename P::T>, "Undefined HomMUX!");
     }
 }

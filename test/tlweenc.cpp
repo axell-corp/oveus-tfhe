@@ -25,5 +25,4 @@ int main()
     for (int i = 0; i < num_test; i++) assert(p[i] == p2[i]);
 
     cout << "Passed" << endl;
-
 }

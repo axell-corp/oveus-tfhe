@@ -21,8 +21,8 @@ constexpr typename P::T offsetgen()
 }
 
 template <class P>
-void Decomposition(DecomposedPolynomial<P> &decpoly, const Polynomial<P> &poly,
-                   typename P::T randbits = 0)
+inline void Decomposition(DecomposedPolynomial<P> &decpoly,
+                          const Polynomial<P> &poly, typename P::T randbits = 0)
 {
 #ifdef USE_OPTIMAL_DECOMPOSITION
     // https://eprint.iacr.org/2021/1161
@@ -70,7 +70,7 @@ void Decomposition(DecomposedPolynomial<P> &decpoly, const Polynomial<P> &poly,
 
     for (int i = 0; i < P::n; i++) {
         for (int l = 0; l < P::l; l++)
-            decpoly[l][i] = ((poly[i] + offset + roundoffset >>
+            decpoly[l][i] = (((poly[i] + offset + roundoffset) >>
                               (std::numeric_limits<typename P::T>::digits -
                                (l + 1) * P::Bgbit)) &
                              mask) -
@@ -103,16 +103,16 @@ template <class P>
 void trgswfftExternalProduct(TRLWE<P> &res, const TRLWE<P> &trlwe,
                              const TRGSWFFT<P> &trgswfft)
 {
-    DecomposedPolynomial<P> decpoly;
+    alignas(64) DecomposedPolynomial<P> decpoly;
     Decomposition<P>(decpoly, trlwe[0]);
-    PolynomialInFD<P> decpolyfft;
-    __builtin_prefetch(trgswfft[0].data());
+    alignas(64) PolynomialInFD<P> decpolyfft;
+    // __builtin_prefetch(trgswfft[0].data());
     TwistIFFT<P>(decpolyfft, decpoly[0]);
-    TRLWEInFD<P> restrlwefft;
+    alignas(64) TRLWEInFD<P> restrlwefft;
     for (int m = 0; m < P::k + 1; m++)
         MulInFD<P::n>(restrlwefft[m], decpolyfft, trgswfft[0][m]);
     for (int i = 1; i < P::l; i++) {
-        __builtin_prefetch(trgswfft[i].data());
+        // __builtin_prefetch(trgswfft[i].data());
         TwistIFFT<P>(decpolyfft, decpoly[i]);
         for (int m = 0; m < P::k + 1; m++)
             FMAInFD<P::n>(restrlwefft[m], decpolyfft, trgswfft[i][m]);
@@ -120,7 +120,7 @@ void trgswfftExternalProduct(TRLWE<P> &res, const TRLWE<P> &trlwe,
     for (int k = 1; k < P::k + 1; k++) {
         Decomposition<P>(decpoly, trlwe[k]);
         for (int i = 0; i < P::l; i++) {
-            __builtin_prefetch(trgswfft[i + k * P::l].data());
+            // __builtin_prefetch(trgswfft[i + k * P::l].data());
             TwistIFFT<P>(decpolyfft, decpoly[i]);
             for (int m = 0; m < P::k + 1; m++)
                 FMAInFD<P::n>(restrlwefft[m], decpolyfft,
@@ -246,7 +246,7 @@ constexpr std::array<typename P::T, P::l> hgen()
 template <class P>
 TRGSWFFT<P> ApplyFFT2trgsw(const TRGSW<P> &trgsw)
 {
-    TRGSWFFT<P> trgswfft;
+    alignas(64) TRGSWFFT<P> trgswfft;
     for (int i = 0; i < (P::k + 1) * P::l; i++)
         for (int j = 0; j < (P::k + 1); j++)
             TwistIFFT<P>(trgswfft[i][j], trgsw[i][j]);

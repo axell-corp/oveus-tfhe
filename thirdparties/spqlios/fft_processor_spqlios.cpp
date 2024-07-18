@@ -4,6 +4,7 @@
 
 #include<params.hpp>
 
+#include "x86.h"
 #include "fft_processor_spqlios.h"
 
 using namespace std;
@@ -22,8 +23,6 @@ FFT_Processor_Spqlios::FFT_Processor_Spqlios(const int32_t N) : _2N(2 * N), N(N)
     tables_reverse = new_ifft_table(N);
     real_inout_direct = fft_table_get_buffer(tables_direct);
     imag_inout_direct = real_inout_direct + Ns2;
-    real_inout_rev = fft_table_get_buffer(tables_reverse);
-    imag_inout_rev = real_inout_rev + Ns2;
     reva = new int32_t[Ns2];
     cosomegaxminus1 = new double[2 * _2N];
     sinomegaxminus1 = cosomegaxminus1 + _2N;
@@ -41,7 +40,8 @@ FFT_Processor_Spqlios::FFT_Processor_Spqlios(const int32_t N) : _2N(2 * N), N(N)
 void FFT_Processor_Spqlios::execute_reverse_int(double *res, const int32_t *a) {
     //for (int32_t i=0; i<N; i++) real_inout_rev[i]=(double)a[i];
     {
-        double *dst = real_inout_rev;
+        double *dst = res;
+        // double *dst = real_inout_rev;
         const int32_t *ait = a;
         const int32_t *aend = a + N;
         __asm__ __volatile__ (
@@ -58,26 +58,7 @@ void FFT_Processor_Spqlios::execute_reverse_int(double *res, const int32_t *a) {
         : "%xmm0", "%ymm1", "memory"
         );
     }
-    ifft(tables_reverse, real_inout_rev);
-    //for (int32_t i=0; i<N; i++) res[i]=real_inout_rev[i];
-    {
-        double *dst = res;
-        double *sit = real_inout_rev;
-        double *send = real_inout_rev + N;
-        __asm__ __volatile__ (
-        "1:\n"
-                "vmovapd (%1),%%ymm0\n"
-                "vmovupd %%ymm0,(%0)\n"
-                "addq $32,%1\n"
-                "addq $32,%0\n"
-                "cmpq %2,%1\n"
-                "jb 1b\n"
-                "vzeroall\n"
-        : "=r"(dst), "=r"(sit), "=r"(send)
-        : "0"(dst), "1"(sit), "2"(send)
-        : "%ymm0", "memory"
-        );
-    }
+    ifft(tables_reverse, res);
 }
 
 void FFT_Processor_Spqlios::execute_reverse_torus32(double *res, const uint32_t *a) {
@@ -87,15 +68,14 @@ void FFT_Processor_Spqlios::execute_reverse_torus32(double *res, const uint32_t 
 
 void FFT_Processor_Spqlios::execute_reverse_torus64(double* res, const uint64_t* a) {
     #ifdef USE_AVX512
-    __m512d * ri512 = (__m512d *) proc->real_inout_rev;
+    __m512d * ri512 = (__m512d *) res;
     __m512i * aa = (__m512i *) a;
     for (size_t i = 0; i < proc->N/8; i++) ri512[i] = _mm512_cvtepi64_pd (aa[i]);
     #else
     int64_t *aa = (int64_t *)a;
-    for (int i=0; i<N; i++) real_inout_rev[i]=(double)aa[i];
+    for (int i=0; i<N; i++) res[i]=(double)aa[i];
     #endif
-    ifft(tables_reverse,real_inout_rev);
-    for (int i=0; i<N; i++) res[i]=real_inout_rev[i];
+    ifft(tables_reverse,res);
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus32(uint32_t *res, const double *a) {
@@ -124,7 +104,8 @@ void FFT_Processor_Spqlios::execute_direct_torus32(uint32_t *res, const double *
         );
     }
     fft(tables_direct, real_inout_direct);
-    for (int32_t i = 0; i < N; i++) res[i] = uint32_t(int64_t(real_inout_direct[i]));
+    // for (int32_t i = 0; i < N; i++) res[i] = uint32_t(int64_t(real_inout_direct[i]));
+    SPQLIOS::convert_f64_to_u32(res,real_inout_direct,N);
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus32_q(uint32_t *res, const double *a, const uint32_t q) {
@@ -238,9 +219,38 @@ void FFT_Processor_Spqlios::execute_direct_torus64(uint64_t* res, const double* 
     #endif
 }
 
+void FFT_Processor_Spqlios::execute_direct_torus64_rescale(uint64_t* res, const double* a, const double Δ) {
+    static const double _2sN = double(2)/double(N);
+    //static const double _2p64 = pow(2.,64);
+    //for (int i=0; i<N; i++) real_inout_direct[i]=a[i]*_2sn;
+    {
+    	double* dst = real_inout_direct;
+	const double* sit = a;
+	const double* send = a+N;
+	//double __2sN = 2./N;
+	const double* bla = &_2sN;
+	__asm__ __volatile__ (
+		"vbroadcastsd (%3),%%ymm2\n"
+		"1:\n"
+		"vmovupd (%1),%%ymm0\n"
+		"vmulpd	%%ymm2,%%ymm0,%%ymm0\n"
+		"vmovapd %%ymm0,(%0)\n"
+		"addq $32,%1\n"
+		"addq $32,%0\n"
+		"cmpq %2,%1\n"
+		"jb 1b\n"
+		: "=r"(dst),"=r"(sit),"=r"(send),"=r"(bla)
+		: "0"(dst),"1"(sit),"2"(send),"3"(bla)
+		: "%ymm0","%ymm2","memory"
+		);
+    }
+    fft(tables_direct,real_inout_direct); 
+    for (int i=0; i<N; i++) res[i] = uint64_t(std::round(real_inout_direct[i]/(Δ/4)));
+}
+
 FFT_Processor_Spqlios::~FFT_Processor_Spqlios() {
-    //delete (tables_direct);
-    //delete (tables_reverse);
+    delete (tables_direct);
+    delete (tables_reverse);
     delete[] cosomegaxminus1;
 }
 

@@ -138,7 +138,7 @@ public:
                 carry.data[0], res_2.data[i], this->data[i],
                 (i < M) ? x.data[i] : zero, carry.data[0], *ek);
         }
- 
+
 #pragma omp parallel for
         for (size_t i = 0; i < N; ++i) {
             res.data[i] = res_2.data[i];

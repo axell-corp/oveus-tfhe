@@ -15,6 +15,10 @@ int main()
     uniform_int_distribution<uint32_t> Bgdist(0, lvl1param::Bg);
     uniform_int_distribution<uint32_t> Torus32dist(0, UINT32_MAX);
 
+#ifdef USE_INTERLEAVED_FORMAT
+    std::cout << "USE_INTERLEAVED_FORMAT" << std::endl;
+#endif
+
     cout << "Start LVL1 test." << endl;
     for (int test = 0; test < num_test; test++) {
         Polynomial<lvl1param> a;
@@ -29,15 +33,15 @@ int main()
     cout << "FFT Passed" << endl;
 
     for (int test = 0; test < num_test; test++) {
-        array<typename TFHEpp::lvl1param::T, lvl1param::n> a;
+        alignas(64) array<typename TFHEpp::lvl1param::T, lvl1param::n> a;
         for (int i = 0; i < lvl1param::n; i++)
             a[i] = Bgdist(engine) - lvl1param::Bg / 2;
         for (typename TFHEpp::lvl1param::T &i : a)
             i = Bgdist(engine) - lvl1param::Bg / 2;
-        array<typename TFHEpp::lvl1param::T, lvl1param::n> b;
+        alignas(64) array<typename TFHEpp::lvl1param::T, lvl1param::n> b;
         for (typename TFHEpp::lvl1param::T &i : b) i = Torus32dist(engine);
 
-        Polynomial<lvl1param> polymul;
+        alignas(64) Polynomial<lvl1param> polymul;
         TFHEpp::PolyMul<lvl1param>(polymul, a, b);
         Polynomial<lvl1param> naieve = {};
         for (int i = 0; i < lvl1param::n; i++) {

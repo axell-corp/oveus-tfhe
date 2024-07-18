@@ -13,7 +13,8 @@ struct lvlMparam {
     static constexpr std::uint32_t l = 2;
     static constexpr std::uint32_t Bgbit = 10;
     static constexpr std::uint32_t Bg = 1 << Bgbit;
-    static constexpr ErrorDistribution errordist = ErrorDistribution::ModularGaussian;
+    static constexpr ErrorDistribution errordist =
+        ErrorDistribution::ModularGaussian;
     static const inline double α = 3.73e-9;
     using T = uint32_t;
     // static constexpr T μ = 0x15555555;
@@ -29,7 +30,8 @@ struct lvlMparam {
     static constexpr std::uint32_t l = 3;
     static constexpr std::uint32_t Bgbit = 7;
     static constexpr std::uint32_t Bg = 1 << Bgbit;
-    static constexpr ErrorDistribution errordist = ErrorDistribution::ModularGaussian;
+    static constexpr ErrorDistribution errordist =
+        ErrorDistribution::ModularGaussian;
     static const inline double α = std::pow(2.0, -25);
     using T = uint32_t;
     // static constexpr T μ = 0x15555555;
@@ -42,7 +44,7 @@ struct lvlMparam {
         plain_modulus;
 };
 #elif defined(USE_CONCRETE)
-//concrete.hpp
+// concrete.hpp
 struct lvlMparam {
     static constexpr std::uint32_t nbit =
         9;  // dimension must be a power of 2 for ease of polynomial
@@ -52,7 +54,8 @@ struct lvlMparam {
     static constexpr std::uint32_t l = 2;
     static constexpr std::uint32_t Bgbit = 8;
     static constexpr std::uint32_t Bg = 1 << Bgbit;
-    static constexpr ErrorDistribution errordist = ErrorDistribution::ModularGaussian;
+    static constexpr ErrorDistribution errordist =
+        ErrorDistribution::ModularGaussian;
     static const inline double α =
         0.00000002989040792967434;  // fresh noise, 2^{-24.9...}
     using T = uint32_t;
@@ -74,7 +77,8 @@ struct lvlMparam {
     static constexpr std::uint32_t l = 3;
     static constexpr std::uint32_t Bgbit = 6;
     static constexpr std::uint32_t Bg = 1 << Bgbit;
-    static constexpr ErrorDistribution errordist = ErrorDistribution::ModularGaussian;
+    static constexpr ErrorDistribution errordist =
+        ErrorDistribution::ModularGaussian;
     static const inline double α = std::pow(2.0, -25);
     using T = uint32_t;
     // static constexpr T μ = 0x15555555;

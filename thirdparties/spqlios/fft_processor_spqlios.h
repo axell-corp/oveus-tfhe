@@ -23,8 +23,6 @@ public:
 private:
     double *real_inout_direct;
     double *imag_inout_direct;
-    double *real_inout_rev;
-    double *imag_inout_rev;
     void *tables_direct;
     void *tables_reverse;
 public:
@@ -47,6 +45,8 @@ public:
     void execute_reverse_torus64(double* res, const uint64_t* a);
     
     void execute_direct_torus64(uint64_t* res, const double* a);
+
+    void execute_direct_torus64_rescale(uint64_t* res, const double* a, const double Δ);
 
     ~FFT_Processor_Spqlios();
 };

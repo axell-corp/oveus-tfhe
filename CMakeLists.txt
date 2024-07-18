@@ -26,6 +26,7 @@ option(USE_RANDEN "Use randen as CSPRNG" ON)
 option(USE_BLAKE3 "Use blake3 as CSPRNG" ON)
 
 option(USE_AVX512 "Use AVX512 ver. SPQLIOS" OFF)
+option(USE_CONCRETE_FFT "Use concrete-fft" OFF)
 option(USE_MKL "Use Intel MKL" OFF)
 option(USE_FFTW3 "Use FFTW3" OFF)
 option(USE_SPQLIOX_AARCH64 "Use spqliox_aarch64" OFF)
@@ -97,13 +98,8 @@ if(NOT USE_TERNARY)
   endif()
 endif()
 
-if(USE_MKL)
-  set(USE_FFTW3 ON)
-endif()
-
-if(USE_AVX512)
-  string(APPEND CMAKE_CXX_FLAGS " -mprefer-vector-width=512")
-endif()
+# if(USE_AVX512) string(APPEND CMAKE_CXX_FLAGS " -mprefer-vector-width=512")
+# endif()
 
 if(USE_FFTW3)
   set(TFHEpp_DEFINITIONS
@@ -111,6 +107,15 @@ if(USE_FFTW3)
       PARENT_SCOPE)
   add_compile_definitions(USE_FFTW3)
   add_subdirectory(thirdparties/fftw)
+elseif(USE_MKL)
+  set(TFHEpp_DEFINITIONS
+      "${TFHEpp_DEFINITIONS};USE_MKL;USE_INTERLEAVED_FORMAT"
+      PARENT_SCOPE)
+  add_compile_definitions(USE_MKL)
+  add_compile_definitions(USE_INTERLEAVED_FORMAT)
+  find_package(MKL CONFIG REQUIRED PATHS $ENV{MKLROOT})
+  include_directories(${MKLROOT}/include)
+  add_subdirectory(thirdparties/mkl)
 elseif(USE_SPQLIOX_AARCH64)
   set(TFHEpp_DEFINITIONS
       "${TFHEpp_DEFINITIONS};USE_SPQLIOX_AARCH64"
@@ -121,6 +126,13 @@ elseif(USE_SPQLIOX_AARCH64)
   if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
     include_directories(/opt/homebrew/include)
   endif()
+elseif(USE_CONCRETE_FFT)
+  set(TFHEpp_DEFINITIONS
+      "${TFHEpp_DEFINITIONS};USE_CONCRETE_FFT;USE_INTERLEAVED_FORMAT"
+      PARENT_SCOPE)
+  add_compile_definitions(USE_CONCRETE_FFT)
+  add_compile_definitions(USE_INTERLEAVED_FORMAT)
+  add_subdirectory(thirdparties/concrete-fft)
 else()
   add_subdirectory(thirdparties/spqlios)
 endif()
