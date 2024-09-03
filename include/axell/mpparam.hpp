@@ -15,8 +15,8 @@ struct lvlMparam {
     static const inline double α = 3.73e-9;
     using T = uint32_t;
     // static constexpr T μ = 0x15555555;
-    static constexpr T μ =
-        (1ULL << std::numeric_limits<typename lvlMparam::T>::digits) / 12;
+    static constexpr std::make_signed_t<T> μ =
+        (1LL << std::numeric_limits<typename lvlMparam::T>::digits) / 12;
 };
 #elif defined(USE_CGGI19)
 // IGG19.hpp
@@ -29,7 +29,7 @@ struct lvlMparam {
     static const inline double α = std::pow(2.0, -25);
     using T = uint32_t;
     // static constexpr T μ = 0x15555555;
-    static constexpr T μ =
+    static constexpr std::make_signed_t<T> μ =
         (1ULL << std::numeric_limits<typename lvlMparam::T>::digits) / 12;
     // dummy
     static constexpr uint32_t plain_modulus = 2;
@@ -52,7 +52,7 @@ struct lvlMparam {
         0.00000002989040792967434;  // fresh noise, 2^{-24.9...}
     using T = uint32_t;
     // static constexpr T μ = 0x15555555;
-    static constexpr T μ =
+    static constexpr std::make_signed_t<T> μ =
         (1ULL << std::numeric_limits<typename lvlMparam::T>::digits) / 12;
     // dummy
     static constexpr uint32_t plain_modulus = 2;
@@ -71,8 +71,8 @@ struct lvlMparam {
     static const inline double α = std::pow(2.0, -25);
     using T = uint32_t;
     // static constexpr T μ = 0x15555555;
-    static constexpr T μ =
-        (1ULL << std::numeric_limits<typename lvlMparam::T>::digits) / 12;
+    static constexpr std::make_signed_t<T> μ =
+        (1LL << std::numeric_limits<typename lvlMparam::T>::digits) / 12;
     // dummy
     static constexpr uint32_t plain_modulus = 2;
     static constexpr double Δ =
