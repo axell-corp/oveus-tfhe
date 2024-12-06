@@ -169,15 +169,22 @@ void tlwe2trlweikskgen(TLWE2TRLWEIKSKey<P>& iksk, const SecretKey& sk)
 }
 
 template <class P>
-void annihilatekeygen(AnnihilateKey<P>& ahk, const Key<P>& key)
+void evalautokeygen(EvalAutoKey<P>& eak, const uint d, const Key<P>& key)
 {
-    for (int i = 0; i < P::nbit; i++) {
+    for(int j = 0; j < P::k; j++) {
         Polynomial<P> autokey;
         std::array<typename P::T, P::n> partkey;
-        for (int i = 0; i < P::n; i++) partkey[i] = key[0 * P::n + i];
-        Automorphism<P>(autokey, partkey, (1 << (P::nbit - i)) + 1);
-        ahk[i] = trgswfftSymEncrypt<P>(autokey, key);
+        for (int k = 0; k < P::n; k++) partkey[k] = key[j * P::n + k];
+        Automorphism<P>(autokey, partkey, d);
+        eak[j] = halftrgswfftSymEncrypt<P>(autokey, key);
     }
+}
+
+template <class P>
+void annihilatekeygen(AnnihilateKey<P>& ahk, const Key<P>& key)
+{
+    for (int i = 0; i < P::nbit; i++)
+        evalautokeygen<P>(ahk[i], (1 << (P::nbit - i)) + 1, key);
 }
 
 template <class P>
@@ -193,7 +200,7 @@ void ikskgen(KeySwitchingKey<P>& ksk, const Key<typename P::domainP>& domainkey,
     for (int l = 0; l < P::domainP::k; l++)
         for (int i = 0; i < P::domainP::n; i++)
             for (int j = 0; j < P::t; j++)
-                for (uint32_t k = 0; k < (1 << P::basebit) - 1; k++)
+                for (uint32_t k = 0; k < 1U << (P::basebit - 1); k++)
                     ksk[l * P::domainP::n + i][j][k] =
                         tlweSymEncrypt<typename P::targetP>(
                             domainkey[l * P::domainP::n + i] * (k + 1) *
@@ -223,7 +230,8 @@ void privkskgen(PrivateKeySwitchingKey<P>& privksk,
 #pragma omp parallel for collapse(3)
     for (int i = 0; i <= P::domainP::k * P::domainP::n; i++)
         for (int j = 0; j < P::t; j++)
-            for (typename P::targetP::T u = 0; u < (1 << P::basebit) - 1; u++) {
+            for (typename P::targetP::T u = 0; u < (1 << (P::basebit - 1));
+                 u++) {
                 TRLWE<typename P::targetP> c =
                     trlweSymEncryptZero<typename P::targetP>(targetkey);
                 for (int k = 0; k < P::targetP::n; k++)
@@ -352,6 +360,7 @@ struct EvalKey {
     std::shared_ptr<KeySwitchingKey<lvl10param>> iksklvl10;
     std::shared_ptr<KeySwitchingKey<lvl1hparam>> iksklvl1h;
     std::shared_ptr<KeySwitchingKey<lvl20param>> iksklvl20;
+    std::shared_ptr<KeySwitchingKey<lvl2hparam>> iksklvl2h;
     std::shared_ptr<KeySwitchingKey<lvl21param>> iksklvl21;
     std::shared_ptr<KeySwitchingKey<lvl22param>> iksklvl22;
     std::shared_ptr<KeySwitchingKey<lvl31param>> iksklvl31;
@@ -556,11 +565,11 @@ struct EvalKey {
                 new (std::align_val_t(64)) KeySwitchingKey<lvl20param>());
             ikskgen<lvl20param>(*iksklvl20, sk);
         }
-        // else if constexpr (std::is_same_v<P, lvl2hparam>) {
-        //     iksklvlh2 =
-        //         std::make_unique_for_overwrite<KeySwitchingKey<lvlh2param>>();
-        //     ikskgen<lvlh2param>(*iksklvlh2, sk);
-        // }
+        else if constexpr (std::is_same_v<P, lvl2hparam>) {
+            iksklvl2h =
+                std::make_unique_for_overwrite<KeySwitchingKey<lvl2hparam>>();
+            ikskgen<lvl2hparam>(*iksklvl2h, sk);
+        }
         else if constexpr (std::is_same_v<P, lvl21param>) {
             iksklvl21 = std::unique_ptr<KeySwitchingKey<lvl21param>>(
                 new (std::align_val_t(64)) KeySwitchingKey<lvl21param>());
@@ -729,9 +738,9 @@ struct EvalKey {
         else if constexpr (std::is_same_v<P, lvl20param>) {
             return *iksklvl20;
         }
-        // else if constexpr (std::is_same_v<P, lvl2hparam>) {
-        //     return *iksklvl2h;
-        // }
+        else if constexpr (std::is_same_v<P, lvl2hparam>) {
+            return *iksklvl2h;
+        }
         else if constexpr (std::is_same_v<P, lvl21param>) {
             return *iksklvl21;
         }
