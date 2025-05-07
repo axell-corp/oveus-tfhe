@@ -54,8 +54,11 @@ struct lvl1param {
             // multiplication.
     static constexpr std::uint32_t n = 1 << nbit;  // dimension
     static constexpr std::uint32_t k = 3;
+    static constexpr std::uint32_t lₐ = 1;
     static constexpr std::uint32_t l = 1;
+    static constexpr std::uint32_t Bgₐbit = 18;
     static constexpr std::uint32_t Bgbit = 18;
+    static constexpr std::uint32_t Bgₐ = 1 << Bgₐbit;
     static constexpr std::uint32_t Bg = 1 << Bgbit;
     static constexpr ErrorDistribution errordist =
         ErrorDistribution::ModularGaussian;
@@ -76,8 +79,11 @@ struct lvl2param {
                                            // ease of polynomial multiplication.
     static constexpr std::uint32_t n = 1 << nbit;  // dimension
     static constexpr std::uint32_t k = 2;
+    static constexpr std::uint32_t lₐ = 4;
     static constexpr std::uint32_t l = 4;
+    static constexpr std::uint32_t Bgₐbit = 9;
     static constexpr std::uint32_t Bgbit = 9;
+    static constexpr std::uint32_t Bgₐ = 1 << Bgₐbit;
     static constexpr std::uint32_t Bg = 1 << Bgbit;
     static constexpr ErrorDistribution errordist =
         ErrorDistribution::ModularGaussian;
@@ -96,6 +102,7 @@ struct lvl3param {
     // ease of polynomial multiplication.
     static constexpr std::uint32_t n = 1 << nbit;  // dimension
     static constexpr std::uint32_t k = 1;
+    static constexpr std::uint32_t lₐ = 4;
     static constexpr std::uint32_t l = 4;
     static constexpr std::uint32_t Bgbit = 9;
     static constexpr std::uint32_t Bg = 1 << Bgbit;

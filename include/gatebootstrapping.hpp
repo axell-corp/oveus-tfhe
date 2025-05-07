@@ -198,6 +198,17 @@ void GateBootstrappingTLWE2TLWEFFT(
 }
 
 template <class P>
+void GateBootstrappingTLWE2TLWEFFT(TLWE<typename P::targetP> &res,
+                                   const TLWE<typename P::domainP> &tlwe,
+                                   const BootstrappingKeyFFT<P> &bkfft,
+                                   const TRLWE<typename P::targetP> &testvector)
+{
+    alignas(64) TRLWE<typename P::targetP> acc;
+    BlindRotate<P>(acc, tlwe, bkfft, testvector);
+    SampleExtractIndex<typename P::targetP>(res, acc, 0);
+}
+
+template <class P>
 void GateBootstrappingTLWE2TLWENTT(
     TLWE<typename P::targetP> &res, const TLWE<typename P::domainP> &tlwe,
     const BootstrappingKeyNTT<P> &bkntt,

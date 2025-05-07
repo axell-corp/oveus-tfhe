@@ -40,9 +40,12 @@ struct lvl1param {
     static constexpr std::uint32_t nbit = 10;
     static constexpr std::uint32_t n = 1 << nbit;
     static constexpr std::uint32_t k = 1;
+    static constexpr std::uint32_t lₐ = 2;
     static constexpr std::uint32_t l = 2;
     static constexpr std::uint32_t Bgbit = 10;
+    static constexpr std::uint32_t Bgₐbit = 10;
     static constexpr std::uint32_t Bg = 1 << Bgbit;
+    static constexpr std::uint32_t Bgₐ = 1 << Bgₐbit;
     static constexpr ErrorDistribution errordist =
         ErrorDistribution::ModularGaussian;
     static const inline double α = 3.73e-9;
@@ -60,9 +63,12 @@ struct lvl2param {
     static const std::uint32_t nbit = 11;
     static constexpr std::uint32_t n = 1 << nbit;
     static constexpr std::uint32_t k = 1;
+    static constexpr std::uint32_t lₐ = 4;
     static constexpr std::uint32_t l = 4;
     static constexpr std::uint32_t Bgbit = 9;
+    static constexpr std::uint32_t Bgₐbit = 9;
     static constexpr std::uint32_t Bg = 1 << Bgbit;
+    static constexpr std::uint32_t Bgₐ = 1 << Bgₐbit;
     static constexpr ErrorDistribution errordist =
         ErrorDistribution::ModularGaussian;
     static const inline double α = std::pow(2.0, -44);
@@ -80,9 +86,12 @@ struct lvl3param {
     // ease of polynomial multiplication.
     static constexpr std::uint32_t n = 1 << nbit;  // dimension
     static constexpr std::uint32_t k = 1;
+    static constexpr std::uint32_t lₐ = 4;
     static constexpr std::uint32_t l = 4;
     static constexpr std::uint32_t Bgbit = 9;
+    static constexpr std::uint32_t Bgₐbit = 9;
     static constexpr std::uint32_t Bg = 1 << Bgbit;
+    static constexpr std::uint32_t Bgₐ = 1 << Bgₐbit;
     static constexpr ErrorDistribution errordist =
         ErrorDistribution::ModularGaussian;
     static const inline double α = std::pow(2.0, -47);  // fresh noise

@@ -10,7 +10,7 @@ jobs:
     runs-on: Ubuntu-22.04
     steps:
     - name: Checkout
-      uses: actions/checkout@v2
+      uses: actions/checkout@v3
 
     - name: Set up Buildx
       uses: docker/setup-buildx-action@v2
@@ -28,3 +28,27 @@ jobs:
       with:
         image: oveus-tfhe-2204
         run: /TFHEpp/build/test/test.sh 
+  ubuntu-2404:
+    name: ubuntu-2404
+    runs-on: Ubuntu-latest
+    container:
+      image: ubuntu:24.04
+    steps:
+    - name: Install libraries
+      run: |
+        apt-get update
+        apt-get upgrade -y
+        apt-get install -y git build-essential g++ libomp-dev cmake git ninja-build
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    - name: build
+      run: |
+        cmake . -Bbuild -GNinja -DCMAKE_BUILD_TYPE=Release -DENABLE_TEST=ON
+        cd build
+        ninja
+    - name: test
+      run: |
+        cd build
+        test/test.sh

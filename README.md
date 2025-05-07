@@ -13,7 +13,8 @@ This repository contains some codes implementing the contents of AXELL CORPORATI
 Below is the README for TFHEpp.
 
 # TFHEpp
-TFHEpp is full Scracthed pure C++ Ver. of TFHE. TFHEpp is slightly(about 10%) faster than original [TFHE implementation](https://github.com/tfhe/tfhe). In addition to that, THFEpp supports Circuit Bootstrapping, [Private Boootstrapping many LUT](https://eprint.iacr.org/2021/729), and [Modifed Cheng's Packing](https://eprint.iacr.org/2024/1318).
+TFHEpp is full Scracthed pure C++ Ver. of TFHE. TFHEpp is slightly(about 10%) faster than original [TFHE implementation](https://github.com/tfhe/tfhe). In addition to that, THFEpp supports [Circuit Bootstrapping](https://eprint.iacr.org/2018/421), [Programable Boootstrapping many LUT](https://eprint.iacr.org/2021/729), and [Modifed Chen's Packing](https://eprint.iacr.org/2024/1318) (We call it as annihilate key switching in our code). 
+We also includes partial support for B/FV, written in include/bfv++.hpp.
 TFHEpp depends on AVX2 because we use SPQLIOS FMA. If you want run TFHEpp without AVX2, see spqlios++ branch. It include pure C++ implementation of SPQLIOS as header only library, but slow.
 
 # Supported Compiler
@@ -21,18 +22,29 @@ TFHEpp depends on AVX2 because we use SPQLIOS FMA. If you want run TFHEpp withou
 This code includes utf-8 identifiers like α, using `extern template`, and std::make_unique_for_overwrite. Therefore, GCC11 or later and Clang16 or later are primarily supported compilers. 
 
 # Parameter
-The default parameter is 128-bit security. Please add -DUSE_80BIT_SECURITY=ON to use a faster but less secure parameter.
+The default parameter (128bit.hpp) is 128-bit security. Please add -DUSE_80BIT_SECURITY=ON to use a faster but less secure parameter.
+The fastest parameter with 128-bit security is concrete.hpp. Please add -DUSE_CONCRETE=ON to use a faster parameter. 
+If you need your own parameter, please modify the files under include/params/ or add your own hpp and add change the macro definition in include/param.hpp. 
+
+## Ternary Key
+As you will see in the files under include/params, we use ternary key for lvl1 or higher levels parameters. 
 
 # FFTW3 Support
 Some environments which do not support AVX2 cannot use spqlios. Instead of spqlios, TFHEpp can use fftw3.
 To use fftw3,  install `libfftw3-dev` and add `-DUSE_FFTW3=ON` to the compile option.
 
 # Third party libraries
-Codes under thirdparties directory contain third-party libraries, Randen, Cereal, and SPQLIOS. See the corresponding directory to check the licenses.
+Codes under thirdparties directory contain third-party libraries, Randen, BLAKE3, Cereal, and SPQLIOS. See the corresponding directory to check the licenses.
 
 ## Randen
-TFHEpp uses this as a Cryptographically Secure Pseudo-Random Number Generator (CSPRNG). Original repository is [here](https://github.com/google/randen).
-I just removed some unnecessary codes, with no modification.
+Previous (till Version 9 in release tags) TFHEpp uses this as a Cryptographically Secure Pseudo-Random Number Generator (CSPRNG). Original repository is [here](https://github.com/google/randen).
+I just removed some unnecessary codes, with no modification. 
+This is now deprecated. To use this, set `-DUSE_BLAKE3=OFF -DUSE_RANDEN=ON` explicitly. 
+
+## BLAKE3
+This is used as another CSPRNG implementation using its eXtended Output Function (XOF) mode. Because Randen is not peer-reviewed algorithm and BLAKE3 is now bit faster than RANDEN, we are now using this as a default CSPRNG. 
+FYI, CRYSTAL-Kyber is using SHA-3's XOF as a CSPRNG generator. We are currently not implemening this because it is slow. 
+Micorosft SEAL implements BLAKE2 as one of the supported CSPRNGs. 
 
 ## Cereal
 cereal is a header-only C++11 serialization library. TFHEpp uses this to export ciphertexts and keys. Cereal is treated by the git submodule.
@@ -41,7 +53,7 @@ cereal is a header-only C++11 serialization library. TFHEpp uses this to export 
 SPQLIOS is the FFT library using AVX2 that is dedicated to the ring R\[X\]/(X^N+1) for N a power of 2. These codes come from [experimental-tfhe](https://github.com/tfhe/experimental-tfhe/tree/master/circuit-bootstrapping/src/spqlios). We just renamed instances to adapt to our codes.
 
 ## SPQLIOS-AVX512
-This is the AVX512 version of SPQLIOS developed in [MOSFHET](https://github.com/antoniocgj/MOSFHET). I confirmed that this is faster than SPQLIOS on Intel i5-11400.
+This is the AVX512 version of SPQLIOS developed in [MOSFHET](https://github.com/antoniocgj/MOSFHET). I confirmed that this is faster than SPQLIOS on Intel i5-11400 and AMD Ryzen 7700X. 
 
 ## FFTW3
 [FFTW](https://www.fftw.org/) is one of the most famous FFT libraries. 
