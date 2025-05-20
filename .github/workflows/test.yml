@@ -38,7 +38,7 @@ jobs:
       run: |
         apt-get update
         apt-get upgrade -y
-        apt-get install -y git build-essential g++ libomp-dev cmake git ninja-build
+        apt-get install -y git build-essential g++ libomp-dev cmake git ninja-build libgoogle-perftools-dev
     - name: Checkout
       uses: actions/checkout@v4
       with:
