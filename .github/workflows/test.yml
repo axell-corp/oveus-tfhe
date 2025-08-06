@@ -57,7 +57,7 @@ jobs:
       run: |
         apt-get update
         apt-get upgrade -y
-        apt-get install -y git build-essential g++ libomp-dev cmake git ninja-build
+        apt-get install -y git build-essential g++ libomp-dev cmake git ninja-build libgoogle-perftools-dev
     - name: Checkout
       uses: actions/checkout@v4
       with:
@@ -101,7 +101,7 @@ jobs:
       run: |
         apt-get update
         apt-get upgrade -y
-        apt-get install -y git build-essential g++ libomp-dev ninja-build clang lld wget
+        apt-get install -y git build-essential g++ libomp-dev ninja-build clang lld wget libgoogle-perftools-dev
         wget https://github.com/Kitware/CMake/releases/download/v4.1.2/cmake-4.1.2-linux-x86_64.tar.gz
         tar -xzvf cmake*
         rm cmake*.tar.gz
