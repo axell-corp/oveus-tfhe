@@ -142,8 +142,7 @@ void HomFullAdder(TLWE<lvlMparam> &carry, TLWE<lvlMparam> &sum,
                   const TLWE<lvlMparam> &ca, const TLWE<lvlMparam> &cb,
                   const TLWE<lvlMparam> &cc, const EvalKey &ek)
 {
-    for (int i = 0; i <= lvlMparam::k * lvlMparam::n; i++)
-        sum[i] = ca[i] + cb[i] + cc[i];
+    TLWEAdd<lvlMparam>(sum,ca,cb,cc);
     TRLWE<lvlMparam> rtemp;
     TLWE<lvl0param> temp;
     IdentityKeySwitch<lvlM0param>(temp, sum, *ek.iksklvl10);

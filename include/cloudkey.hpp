@@ -103,18 +103,12 @@ struct EvalKey {
     template <class P>
     void emplacebkfft(const SecretKey& sk)
     {
-<<<<<<< HEAD
-        if constexpr (std::is_same_v<P, lvl01param> ||
-                      std::is_same_v<P, lvl0Mparam>) {
-            bkfftlvl01 = std::unique_ptr<BootstrappingKeyFFT<lvl01param>>(
-                new (std::align_val_t(64)) BootstrappingKeyFFT<lvl01param>());
-=======
         if constexpr (std::is_same_v<P, lvl01param>) {
             bkfftlvl01 = std::make_unique_for_overwrite<BootstrappingKeyFFT<lvl01param>>();
->>>>>>> original/master
             bkfftgen<lvl01param>(*bkfftlvl01, sk);
         }
-        else if constexpr (std::is_same_v<P, lvlh1param>) {
+        else if constexpr (std::is_same_v<P, lvlh1param>||
+                      std::is_same_v<P, lvl0Mparam>) {
             bkfftlvlh1 = std::make_unique_for_overwrite<BootstrappingKeyFFT<lvlh1param>>();
             bkfftgen<lvlh1param>(*bkfftlvlh1, sk);
         }
@@ -228,7 +222,7 @@ struct EvalKey {
     template <class P>
     void emplaceiksk(const SecretKey& sk)
     {
-        if constexpr (std::is_same_v<P, lvl10param>) ||
+        if constexpr (std::is_same_v<P, lvl10param> ||
                       std::is_same_v<P, lvlM0param>) {
             iksklvl10 = std::make_unique_for_overwrite<KeySwitchingKey<lvl10param>>();
             ikskgen<lvl10param>(*iksklvl10, sk);
