@@ -86,11 +86,7 @@ jobs:
       run: |
         apt-get update
         apt-get upgrade -y
-<<<<<<< HEAD
-        apt-get install -y git build-essential g++ libomp-dev cmake git ninja-build clang-18 libgoogle-perftools-dev
-=======
-        apt-get install -y git build-essential g++ libomp-dev cmake git ninja-build clang-20 lld-20
->>>>>>> original/master
+        apt-get install -y git build-essential g++ libomp-dev cmake git ninja-build clang-20 lld-20 libgoogle-perftools-dev
     - name: Checkout
       uses: actions/checkout@v4
       with:
