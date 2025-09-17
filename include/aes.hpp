@@ -116,7 +116,8 @@ void AESSboxROM(const std::span<TLWE<typename brP::targetP>, 8> res,
         if (i >= width_bit)
             for (int j = 0; j <= iksP::domainP::k * iksP::domainP::n; j++)
                 shifted[j] *= -1;
-        AnnihilateCircuitBootstrapping<iksP, brP, ahP>(trgsw[i], shifted, ek);
+        AnnihilateCircuitBootstrappingFFT<iksP, brP, ahP>(trgsw[i], shifted,
+                                                          ek);
     }
     std::array<TRLWE<typename brP::targetP>, (1 << 8) / (brP::targetP::n / 8)>
         rom = {};
@@ -254,7 +255,8 @@ void AESInvSboxROM(std::array<TLWE<typename brP::targetP>, 8> &res,
         if (i >= width_bit)
             for (int j = 0; j <= iksP::domainP::k * iksP::domainP::n; j++)
                 shifted[j] *= -1;
-        AnnihilateCircuitBootstrapping<iksP, brP, ahP>(trgsw[i], shifted, ek);
+        AnnihilateCircuitBootstrappingFFT<iksP, brP, ahP>(trgsw[i], shifted,
+                                                          ek);
     }
     std::array<TRLWE<typename brP::targetP>, (1 << 8) / (brP::targetP::n / 8)>
         rom = {};

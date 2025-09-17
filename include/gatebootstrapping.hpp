@@ -64,7 +64,7 @@ void BlindRotate(TRLWE<typename P::targetP> &res,
                         std::span(moded)
                             .subspan(P::Addends * i, P::Addends)
                             .template first<P::Addends>());
-        ExternalProduct<typename P::targetP>(res, res, BKadded);
+        trgswfftExternalProduct<typename P::targetP>(res, res, BKadded);
     }
 #else
     for (int i = 0; i < P::domainP::k * P::domainP::n; i++) {
