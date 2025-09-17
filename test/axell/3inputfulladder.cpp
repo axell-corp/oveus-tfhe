@@ -35,15 +35,15 @@ int main()
     for (int i = 0; i < num_test; i++)
         ca[i] = tlweSymEncrypt<lvl1param>(
             pa[i] ? lvl1param::μ / 2 : -(lvl1param::μ / 2), lvl1param::α,
-            sk->key.lvl1);
+            sk->key.get<lvl1param>());
     for (int i = 0; i < num_test; i++)
         cb[i] = tlweSymEncrypt<lvl1param>(
             pb[i] ? lvl1param::μ / 2 : -(lvl1param::μ / 2), lvl1param::α,
-            sk->key.lvl1);
+            sk->key.get<lvl1param>());
     for (int i = 0; i < num_test; i++)
         cc[i] = tlweSymEncrypt<lvl1param>(
             pc[i] ? lvl1param::μ / 2 : -(lvl1param::μ / 2), lvl1param::α,
-            sk->key.lvl1);
+            sk->key.get<lvl1param>());
     ;
 
     chrono::system_clock::time_point start, end;
@@ -57,9 +57,9 @@ int main()
 
     end = chrono::system_clock::now();
     for (int i = 0; i < num_test; i++)
-        anssum[i] = tlweSymDecrypt<lvl1param>(sum[i], sk->key.lvl1);
+        anssum[i] = tlweSymDecrypt<lvl1param>(sum[i], sk->key.get<lvl1param>());
     for (int i = 0; i < num_test; i++)
-        anscarry[i] = tlweSymDecrypt<lvl1param>(carry[i], sk->key.lvl1);
+        anscarry[i] = tlweSymDecrypt<lvl1param>(carry[i], sk->key.get<lvl1param>());
     for (int i = 0; i < num_test; i++)
         assert(anssum[i] == ((pa[i] + pb[i] + pc[i]) & 1));
     for (int i = 0; i < num_test; i++)

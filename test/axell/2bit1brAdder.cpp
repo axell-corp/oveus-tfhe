@@ -30,14 +30,14 @@ int main()
         for(int j = 0; j<2; j++){
             ca[i][j] = TFHEpp::tlweSymEncrypt<TFHEpp::lvl1param>(
                 (pa[i]>>j)&1 ? TFHEpp::lvlMparam::μ : -TFHEpp::lvlMparam::μ,
-                TFHEpp::lvl1param::α, sk->key.lvl1);
+                TFHEpp::lvl1param::α, sk->key.get<TFHEpp::lvl1param>());
             TFHEpp::GateBootstrapping<TFHEpp::lvlM0param,TFHEpp::lvl0Mparam,TFHEpp::lvlMparam::μ>(ca[i][j],ca[i][j],ek);
         }
     for (int i = 0; i < num_test; i++)
         for(int j = 0; j<2; j++){
             cb[i][j] = TFHEpp::tlweSymEncrypt<TFHEpp::lvl1param>(
                 (pb[i]>>j)&1 ? TFHEpp::lvlMparam::μ : -TFHEpp::lvlMparam::μ,
-                TFHEpp::lvl1param::α, sk->key.lvl1);
+                TFHEpp::lvl1param::α, sk->key.get<TFHEpp::lvl1param>());
             TFHEpp::GateBootstrapping<TFHEpp::lvlM0param,TFHEpp::lvl0Mparam,TFHEpp::lvlMparam::μ>(cb[i][j],cb[i][j],ek);
         }
 
@@ -55,7 +55,7 @@ int main()
     for (int i = 0; i < num_test; i++)
         for(int j = 0; j<3;j++)
         pres[i] +=
-            static_cast<uint8_t>(TFHEpp::tlweSymDecrypt<TFHEpp::lvl1param>(cres[i][j], sk->key.lvl1))<<j;
+            static_cast<uint8_t>(TFHEpp::tlweSymDecrypt<TFHEpp::lvl1param>(cres[i][j], sk->key.get<TFHEpp::lvl1param>()))<<j;
     // for (int i = 0; i < num_test; i++)
     // std::cout<<static_cast<int>(pcarry[i])<<":"<<static_cast<int>(psum[i])<<";"<<static_cast<int>(((pa[i]
     // + pb[i] + pc[i]) & 2) >> 1)<<":"<<static_cast<int>((pa[i] + pb[i] +

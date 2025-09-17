@@ -30,11 +30,11 @@ int main()
     for (int i = 0; i < num_test; i++)
         ca[i] = TFHEpp::tlweSymEncrypt<TFHEpp::lvl1param>(
             pa[i] ? TFHEpp::lvl1param::μ : -TFHEpp::lvl1param::μ,
-            TFHEpp::lvl1param::α, sk->key.lvl1);
+            TFHEpp::lvl1param::α, sk->key.get<TFHEpp::lvl1param>());
     for (int i = 0; i < num_test; i++)
         cb[i] = TFHEpp::tlweSymEncrypt<TFHEpp::lvl1param>(
             pb[i] ? TFHEpp::lvl1param::μ : -TFHEpp::lvl1param::μ,
-            TFHEpp::lvl1param::α, sk->key.lvl1);
+            TFHEpp::lvl1param::α, sk->key.get<TFHEpp::lvl1param>());
 
     std::chrono::system_clock::time_point start, end;
     start = std::chrono::system_clock::now();
@@ -46,10 +46,10 @@ int main()
     end = std::chrono::system_clock::now();
     for (int i = 0; i < num_test; i++)
         pand[i] =
-            TFHEpp::tlweSymDecrypt<TFHEpp::lvl1param>(carry[i], sk->key.lvl1);
+            TFHEpp::tlweSymDecrypt<TFHEpp::lvl1param>(carry[i], sk->key.get<TFHEpp::lvl1param>());
     for (int i = 0; i < num_test; i++)
         pxor[i] =
-            TFHEpp::tlweSymDecrypt<TFHEpp::lvl1param>(sum[i], sk->key.lvl1);
+            TFHEpp::tlweSymDecrypt<TFHEpp::lvl1param>(sum[i], sk->key.get<TFHEpp::lvl1param>());
     for (int i = 0; i < num_test; i++) assert(pand[i] == (pa[i] & pb[i]));
     for (int i = 0; i < num_test; i++) assert(pxor[i] == (pa[i] ^ pb[i]));
     std::cout << "Passed" << std::endl;

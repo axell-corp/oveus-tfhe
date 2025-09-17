@@ -32,15 +32,15 @@ int main()
     for (int i = 0; i < num_test; i++)
         ca[i] = TFHEpp::tlweSymEncrypt<TFHEpp::lvl1param>(
             pa[i] ? TFHEpp::lvl1param::μ : -TFHEpp::lvl1param::μ,
-            TFHEpp::lvl1param::α, sk->key.lvl1);
+            TFHEpp::lvl1param::α, sk->key.get<TFHEpp::lvl1param>());
     for (int i = 0; i < num_test; i++)
         cb[i] = TFHEpp::tlweSymEncrypt<TFHEpp::lvl1param>(
             pb[i] ? TFHEpp::lvl1param::μ : -TFHEpp::lvl1param::μ,
-            TFHEpp::lvl1param::α, sk->key.lvl1);
+            TFHEpp::lvl1param::α, sk->key.get<TFHEpp::lvl1param>());
     for (int i = 0; i < num_test; i++)
         cs[i] = TFHEpp::tlweSymEncrypt<TFHEpp::lvl1param>(
             ps[i] ? TFHEpp::lvl1param::μ : -TFHEpp::lvl1param::μ,
-            TFHEpp::lvl1param::α, sk->key.lvl1);
+            TFHEpp::lvl1param::α, sk->key.get<TFHEpp::lvl1param>());
 
     std::chrono::system_clock::time_point start, end;
     start = std::chrono::system_clock::now();
@@ -53,10 +53,10 @@ int main()
     end = std::chrono::system_clock::now();
     for (int i = 0; i < num_test; i++)
         presa[i] =
-            TFHEpp::tlweSymDecrypt<TFHEpp::lvl1param>(cresa[i], sk->key.lvl1);
+            TFHEpp::tlweSymDecrypt<TFHEpp::lvl1param>(cresa[i], sk->key.get<TFHEpp::lvl1param>());
     for (int i = 0; i < num_test; i++)
         presb[i] =
-            TFHEpp::tlweSymDecrypt<TFHEpp::lvl1param>(cresb[i], sk->key.lvl1);
+            TFHEpp::tlweSymDecrypt<TFHEpp::lvl1param>(cresb[i], sk->key.get<TFHEpp::lvl1param>());
     // for (int i = 0; i < num_test; i++)
     // std::cout<<static_cast<int>(presa[i])<<":"<<static_cast<int>(presb[i])<<";"<<static_cast<int>(ps[i])<<":"<<static_cast<int>(ps[i]?pb[i]:pa[i])<<":"<<static_cast<int>(ps[i]?pa[i]:pb[i])<<std::endl;
     for (int i = 0; i < num_test; i++)

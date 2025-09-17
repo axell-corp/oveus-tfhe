@@ -12,6 +12,7 @@
 #include "externs/tlwe.hpp"
 #include "externs/trgsw.hpp"
 #include "externs/trlwe.hpp"
+#include "externs/key.hpp"
 #include "gate.hpp"
 #include "gatebootstrapping.hpp"
 #include "homdecomp.hpp"

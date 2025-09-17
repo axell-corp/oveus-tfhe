@@ -36,19 +36,19 @@ int main()
     for (int i = 0; i < num_test; i++)
         ca[i] = tlweSymEncrypt<lvl1param>(
             pa[i] ? lvl1param::μ / 2 : -(lvl1param::μ / 2), lvl1param::α,
-            sk->key.lvl1);
+            sk->key.get<lvl1param>());
     for (int i = 0; i < num_test; i++)
         cb[i] = tlweSymEncrypt<lvl1param>(
             pb[i] ? lvl1param::μ / 2 : -(lvl1param::μ / 2), lvl1param::α,
-            sk->key.lvl1);
+            sk->key.get<lvl1param>());
     for (int i = 0; i < num_test; i++)
         cc[i] = tlweSymEncrypt<lvl1param>(
             pc[i] ? lvl1param::μ / 2 : -(lvl1param::μ / 2), lvl1param::α,
-            sk->key.lvl1);
+            sk->key.get<lvl1param>());
     for (int i = 0; i < num_test; i++)
         cd[i] = tlweSymEncrypt<lvl1param>(
             pd[i] ? lvl1param::μ / 2 : -(lvl1param::μ / 2), lvl1param::α,
-            sk->key.lvl1);
+            sk->key.get<lvl1param>());
 
     chrono::system_clock::time_point start, end;
     start = chrono::system_clock::now();
@@ -59,7 +59,7 @@ int main()
 
     end = chrono::system_clock::now();
     for (int i = 0; i < num_test; i++)
-        pres[i] = tlweSymDecrypt<lvl1param>(cres[i], sk->key.lvl1);
+        pres[i] = tlweSymDecrypt<lvl1param>(cres[i], sk->key.get<lvl1param>());
     for (int i = 0; i < num_test; i++)
         assert(pres[i] == (pa[i] | pb[i] | pc[i] | pd[i]));
     cout << "Passed 4inputOR" << endl;
@@ -76,7 +76,7 @@ int main()
 
     end = chrono::system_clock::now();
     for (int i = 0; i < num_test; i++)
-        pres[i] = tlweSymDecrypt<lvl1param>(cres[i], sk->key.lvl1);
+        pres[i] = tlweSymDecrypt<lvl1param>(cres[i], sk->key.get<lvl1param>());
     for (int i = 0; i < num_test; i++)
         assert(pres[i] == (pa[i] & pb[i] & pc[i] & pd[i]));
     cout << "Passed 4inputAND" << endl;
