@@ -59,7 +59,7 @@ int main()
 #endif
     start = std::chrono::system_clock::now();
     for (int test = 0; test < num_test; test++) {
-        TFHEpp::AnnihilateCircuitBootstrapping<iksP, brP, ahP>(
+        TFHEpp::AnnihilateCircuitBootstrappingFFT<iksP, brP, ahP>(
             bootedTGSW[test], cones[test], ek);
     }
     end = std::chrono::system_clock::now();

@@ -12,8 +12,7 @@ constexpr lvl1param::T DEF_oneover12 =
     (1ULL << std::numeric_limits<typename lvl1param::T>::digits) / 12;
 
 template <class P>
-struct KeySwitchParam {
-};
+struct KeySwitchParam {};
 template <>
 struct KeySwitchParam<lvl1param> {
     using P = lvl10param;
@@ -24,8 +23,7 @@ struct KeySwitchParam<lvlMparam> {
 };
 
 template <class P>
-struct BlindRotateParam {
-};
+struct BlindRotateParam {};
 template <>
 struct BlindRotateParam<lvl1param> {
     using P = lvl01param;

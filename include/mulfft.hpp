@@ -66,6 +66,7 @@ template <class P>
 inline void TwistFFT(Polynomial<P> &res, PolynomialInFD<P> &a)
 {
     if constexpr (std::is_same_v<P, lvl1param> ||
+                  std::is_same_v<P, TFHEpp::lvlMparam> ||
                   std::is_same_v<P, AHlvl1param>) {
         if constexpr (std::is_same_v<typename P::T, uint32_t>)
             // if constexpr(hasq<P>)
@@ -157,6 +158,7 @@ template <class P>
 inline void TwistIFFT(PolynomialInFD<P> &res, const Polynomial<P> &a)
 {
     if constexpr (std::is_same_v<P, lvl1param> ||
+                  std::is_same_v<P, TFHEpp::lvlMparam> ||
                   std::is_same_v<P, AHlvl1param>) {
         if constexpr (std::is_same_v<typename P::T, uint32_t>)
             fftplvl1.execute_reverse_torus32(res.data(), a.data());

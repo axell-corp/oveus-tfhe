@@ -183,20 +183,20 @@ int main()
 
             bootsSymEncrypt(encaddress, address, *sk);
             for (int i = 0; i < numromtrlwe; i++)
-                trlweSymEncrypt<lvl1param>(
-                    encrom[i], romu[i], (*sk).key.get<lvl1param>());
+                encrom[i] = trlweSymEncrypt<lvl1param>(
+                    romu[i], (*sk).key.get<lvl1param>());
             for (int i = 0; i < words; i++)
                 for (int j = 0; j < numramtrlwe; j++)
-                    trlweSymEncrypt<lvl1param>(
-                        encram[i][j], ramu[i][j], (*sk).key.get<lvl1param>());
+                    encram[i][j] = trlweSymEncrypt<lvl1param>(
+                        ramu[i][j], (*sk).key.get<lvl1param>());
 
-            tlweSymEncrypt<lvl1param>(
-                encwrflag, (wrflag > 0) ? lvl1param::μ : -lvl1param::μ,
+            encwrflag = tlweSymEncrypt<lvl1param>(
+                (wrflag > 0) ? lvl1param::μ : -lvl1param::μ,
                 (*sk).key.get<lvl1param>());
 
             for (int i = 0; i < words; i++)
-                tlweSymEncrypt<lvl1param>(
-                    encwritep[i], writep[i] ? lvl1param::μ : -lvl1param::μ,
+                encwritep[i] = tlweSymEncrypt<lvl1param>(
+                    writep[i] ? lvl1param::μ : -lvl1param::μ,
                     (*sk).key.get<lvl1param>());
 
             chrono::system_clock::time_point start, end;

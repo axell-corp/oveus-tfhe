@@ -308,6 +308,54 @@ PrivateKeySwitchingKey<P>& EvalKey::getprivksk(const std::string& key) const
 TFHEPP_EXPLICIT_INSTANTIATION_KEY_SWITCH_TO_TRLWE(INST)
 #undef INST
 
+#define INST(P)                                                          \
+    template SubsetPrivateKeySwitchingKey<P>& EvalKey::getsubprivksk<P>( \
+        const std::string& key) const
+TFHEPP_EXPLICIT_INSTANTIATION_SUBSET_KEY_SWITCH_TO_TRLWE(INST)
+#undef INST
+
+#define INST(P) template AnnihilateKey<P>& EvalKey::getahk<P>() const
+TFHEPP_EXPLICIT_INSTANTIATION_ANNIHILATE(INST)
+#undef INST
+
+#define INST(P) template CBswitchingKey<P>& EvalKey::getcbsk<P>() const
+TFHEPP_EXPLICIT_INSTANTIATION_ANNIHILATE(INST)
+#undef INST
+
+// Explicit template instantiations for get<T>() helper functions
+#define INST(P) template auto& EvalKey::get<BootstrappingKey<P>>()
+TFHEPP_EXPLICIT_INSTANTIATION_BLIND_ROTATE(INST)
+#undef INST
+
+#define INST(P) template auto& EvalKey::get<BootstrappingKeyFFT<P>>()
+TFHEPP_EXPLICIT_INSTANTIATION_BLIND_ROTATE(INST)
+#undef INST
+
+#define INST(P) template auto& EvalKey::get<BootstrappingKeyNTT<P>>()
+TFHEPP_EXPLICIT_INSTANTIATION_BLIND_ROTATE(INST)
+#undef INST
+
+#define INST(P) template auto& EvalKey::get<KeySwitchingKey<P>>()
+TFHEPP_EXPLICIT_INSTANTIATION_KEY_SWITCH_TO_TLWE(INST)
+#undef INST
+
+#define INST(P) template auto& EvalKey::get<SubsetKeySwitchingKey<P>>()
+TFHEPP_EXPLICIT_INSTANTIATION_SUBSET_KEY_SWITCH_TO_TLWE(INST)
+#undef INST
+
+#define INST(P) template auto& EvalKey::get<AnnihilateKey<P>>()
+TFHEPP_EXPLICIT_INSTANTIATION_ANNIHILATE(INST)
+#undef INST
+
+#define INST(P) template auto& EvalKey::get<CBswitchingKey<P>>()
+TFHEPP_EXPLICIT_INSTANTIATION_ANNIHILATE(INST)
+#undef INST
+
+// Explicit template instantiations for get_map<T>() helper functions
+#define INST(P) template auto& EvalKey::get_map<PrivateKeySwitchingKey<P>>()
+TFHEPP_EXPLICIT_INSTANTIATION_KEY_SWITCH_TO_TRLWE(INST)
+#undef INST
+
 #define INST(P) \
     template auto& EvalKey::get_map<SubsetPrivateKeySwitchingKey<P>>()
 TFHEPP_EXPLICIT_INSTANTIATION_SUBSET_KEY_SWITCH_TO_TRLWE(INST)

@@ -26,18 +26,17 @@ int main()
     std::chrono::system_clock::time_point start, end;
     start = std::chrono::system_clock::now();
     for (int test = 0; test < num_test; test++) {
+        bool p = binary(engine) > 0;
+        TFHEpp::TLWE<TFHEpp::lvl1param> tlwe =
+            TFHEpp::tlweSymEncrypt<TFHEpp::lvl1param>(
+                p ? TFHEpp::lvl1param::μ : -TFHEpp::lvl1param::μ,
+                sk.key.get<TFHEpp::lvl1param>());
+        TFHEpp::TLWE<TFHEpp::lvl0param> res;
         TFHEpp::IdentityKeySwitch<TFHEpp::lvl10param>(
-            res[test], tlwe[test], ek.getiksk<TFHEpp::lvl10param>());
-    }
-    end = std::chrono::system_clock::now();
-    double elapsed =
-        std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
-            .count();
-    std::cout << elapsed / num_test << "ms" << std::endl;
-    for (int i = 0; i < num_test; i++) {
+            res, tlwe, ek.getiksk<TFHEpp::lvl10param>());
         bool p2 = TFHEpp::tlweSymDecrypt<TFHEpp::lvl0param>(
-            res[i], sk.key.get<TFHEpp::lvl0param>());
-        assert(p[i] == p2);
+            res, sk.key.get<TFHEpp::lvl0param>());
+        assert(p == p2);
     }
     std::cout << "Passed" << std::endl;
 }
