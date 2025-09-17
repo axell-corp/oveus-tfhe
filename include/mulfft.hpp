@@ -78,7 +78,9 @@ inline void TwistNTT(Polynomial<P> &res, PolynomialNTT<P> &a)
 template <class P>
 inline void TwistFFT(Polynomial<P> &res, const PolynomialInFD<P> &a)
 {
-    if constexpr (std::is_same_v<P, lvl1param> || std::is_same_v<P, TFHEpp::lvlMparam> || std::is_same_v<P, AHlvl1param>) {
+    if constexpr (std::is_same_v<P, lvl1param> ||
+                  std::is_same_v<P, TFHEpp::lvlMparam> ||
+                  std::is_same_v<P, AHlvl1param>) {
         if constexpr (std::is_same_v<typename P::T, uint32_t>)
             // if constexpr(hasq<P>)
             // fftplvl1.execute_direct_torus32_q(res.data(), a.data(), P::q);
@@ -135,7 +137,9 @@ inline void TwistINTT(PolynomialNTT<P> &res, const Polynomial<P> &a)
 template <class P>
 inline void TwistIFFT(PolynomialInFD<P> &res, const Polynomial<P> &a)
 {
-    if constexpr (std::is_same_v<P, lvl1param> || std::is_same_v<P, TFHEpp::lvlMparam> || std::is_same_v<P, AHlvl1param>) {
+    if constexpr (std::is_same_v<P, lvl1param> ||
+                  std::is_same_v<P, TFHEpp::lvlMparam> ||
+                  std::is_same_v<P, AHlvl1param>) {
         if constexpr (std::is_same_v<typename P::T, uint32_t>)
             fftplvl1.execute_reverse_torus32(res.data(), a.data());
         if constexpr (std::is_same_v<typename P::T, uint64_t>)
@@ -150,7 +154,8 @@ inline void TwistIFFT(PolynomialInFD<P> &res, const Polynomial<P> &a)
 template <class P>
 inline void TwistIFFTUInt(PolynomialInFD<P> &res, const Polynomial<P> &a)
 {
-    if constexpr (std::is_same_v<P, lvl1param> || std::is_same_v<P, AHlvl1param>) {
+    if constexpr (std::is_same_v<P, lvl1param> ||
+                  std::is_same_v<P, AHlvl1param>) {
         if constexpr (std::is_same_v<typename P::T, uint32_t>)
             fftplvl1.execute_reverse_uint(res.data(), a.data());
         // if constexpr (std::is_same_v<typename P::T, uint64_t>)
@@ -372,7 +377,7 @@ inline void PolyMulNaieveRescaleUnsigned(Polynomial<P> &res,
 template <class P>
 std::unique_ptr<std::array<PolynomialInFD<P>, 2 * P::n>> XaittGen()
 {
-    std::unique_ptr<std::array<PolynomialInFD<P>, 2 *P::n>> xaitt =
+    std::unique_ptr<std::array<PolynomialInFD<P>, 2 * P::n>> xaitt =
         std::make_unique<std::array<PolynomialInFD<P>, 2 * P::n>>();
     for (int i = 0; i < 2 * P::n; i++) {
         std::array<typename P::T, P::n> xai = {};
@@ -389,7 +394,7 @@ std::unique_ptr<std::array<PolynomialInFD<P>, 2 * P::n>> XaittGen()
 template <class P>
 std::unique_ptr<std::array<PolynomialNTT<P>, 2 * P::n>> XaittGenNTT()
 {
-    std::unique_ptr<std::array<PolynomialNTT<P>, 2 *P::n>> xaitt =
+    std::unique_ptr<std::array<PolynomialNTT<P>, 2 * P::n>> xaitt =
         std::make_unique<std::array<PolynomialNTT<P>, 2 * P::n>>();
     for (int i = 0; i < 2 * P::n; i++) {
         std::array<typename P::T, P::n> xai = {};
@@ -405,10 +410,10 @@ std::unique_ptr<std::array<PolynomialNTT<P>, 2 * P::n>> XaittGenNTT()
 
 #if defined(USE_TERNARY) || defined(USE_KEY_BUNDLE)
 alignas(64) static const std::unique_ptr<
-    const std::array<PolynomialInFD<lvl1param>, 2 *lvl1param::n>> xaittlvl1 =
+    const std::array<PolynomialInFD<lvl1param>, 2 * lvl1param::n>> xaittlvl1 =
     XaittGen<lvl1param>();
 alignas(64) static const std::unique_ptr<
-    const std::array<PolynomialInFD<lvl2param>, 2 *lvl2param::n>> xaittlvl2 =
+    const std::array<PolynomialInFD<lvl2param>, 2 * lvl2param::n>> xaittlvl2 =
     XaittGen<lvl2param>();
 #endif
 #ifdef USE_TERNARY

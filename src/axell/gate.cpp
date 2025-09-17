@@ -23,8 +23,9 @@ void HomSWAP(TLWE<lvl1param> &resa, TLWE<lvl1param> &resb,
     intemp[lvl1param::k * lvl1param::n] += 2 * lvl1param::μ;
     TLWE<lvl0param> intemplvl0;
     IdentityKeySwitch<lvl10param>(intemplvl0, intemp, ek.getiksk<lvl10param>());
-    GateBootstrappingTLWE2TLWEFFT<lvl01param>(
-        intemp, intemplvl0, ek.getbkfft<lvl01param>(), swaptestvecgen<lvl1param>());
+    GateBootstrappingTLWE2TLWEFFT<lvl01param>(intemp, intemplvl0,
+                                              ek.getbkfft<lvl01param>(),
+                                              swaptestvecgen<lvl1param>());
     for (int i = 0; i <= lvl1param::k * lvl1param::n; i++) intemp[i] += cs[i];
     intemp[lvl1param::k * lvl1param::n] += lvl1param::μ;
     IdentityKeySwitch<lvl10param>(intemplvl0, intemp, ek.getiksk<lvl10param>());
@@ -46,7 +47,8 @@ void HomHalfAdder(TLWE<lvl1param> &carry, TLWE<lvl1param> &sum,
         sum[i] = c0[i] + c1[i];  // use sum as buffer
     TLWE<lvl0param> cadd;
     IdentityKeySwitch<lvl10param>(cadd, sum, ek.getiksk<lvl10param>());
-    BlindRotate<lvl01param>(trlwe, cadd, ek.getbkfft<lvl01param>(), μpolygen<P, P::μ>());
+    BlindRotate<lvl01param>(trlwe, cadd, ek.getbkfft<lvl01param>(),
+                            μpolygen<P, P::μ>());
     TLWE<P> cor;
     constexpr typename lvl01param::domainP::T roundoffset =
         1ULL << (std::numeric_limits<typename lvl01param::domainP::T>::digits -
@@ -90,11 +92,13 @@ void Hom2BRFullAdder(TLWE<lvl1param> &carry, TLWE<lvl1param> &sum,
     // These are parallel
     // carry
     GateBootstrappingTLWE2TLWEFFT<lvl01param>(
-        carry, intemplvl0, ek.getbkfft<lvl01param>(), μpolygen<lvl1param, lvl1param::μ>());
+        carry, intemplvl0, ek.getbkfft<lvl01param>(),
+        μpolygen<lvl1param, lvl1param::μ>());
     // sum
     for (int i = 0; i <= lvl0param::n; i++) intemplvl0[i] *= -2;
     GateBootstrappingTLWE2TLWEFFT<lvl01param>(
-        sum, intemplvl0, ek.getbkfft<lvl01param>(), μpolygen<lvl1param, lvl1param::μ>());
+        sum, intemplvl0, ek.getbkfft<lvl01param>(),
+        μpolygen<lvl1param, lvl1param::μ>());
 }
 
 template <class P, uint32_t num_input>
@@ -142,7 +146,7 @@ void HomFullAdder(TLWE<lvlMparam> &carry, TLWE<lvlMparam> &sum,
                   const TLWE<lvlMparam> &ca, const TLWE<lvlMparam> &cb,
                   const TLWE<lvlMparam> &cc, const EvalKey &ek)
 {
-    TLWEAdd<lvlMparam>(sum,ca,cb,cc);
+    TLWEAdd<lvlMparam>(sum, ca, cb, cc);
     TRLWE<lvlMparam> rtemp;
     TLWE<lvl0param> temp;
     IdentityKeySwitch<lvlM0param>(temp, sum, ek.getiksk<lvlM0param>());
@@ -257,7 +261,8 @@ void Hom3inputThreashold(TLWE<lvl1param> &res, const TLWE<lvl1param> &ca,
     TLWE<lvl0param> temp;
     IdentityKeySwitch<lvl10param>(temp, res, ek.getiksk<lvl10param>());
     GateBootstrappingTLWE2TLWEFFT<lvl01param>(
-        res, temp, ek.getbkfft<lvl01param>(), μpolygen<lvl1param, lvl1param::μ>());
+        res, temp, ek.getbkfft<lvl01param>(),
+        μpolygen<lvl1param, lvl1param::μ>());
 }
 
 template <class P>
@@ -276,10 +281,11 @@ void HomAOI3(TLWE<P> &res, const TLWE<P> &ca, const TLWE<P> &cb,
     res[P::k * P::n] +=
         (1ULL << std::numeric_limits<typename P::T>::digits) / 12;
     TLWE<lvl0param> temp;
-    IdentityKeySwitch<typename KeySwitchParam<P>::P>(temp, res, ek.getiksk<lvl10param>());
+    IdentityKeySwitch<typename KeySwitchParam<P>::P>(temp, res,
+                                                     ek.getiksk<lvl10param>());
     TRLWE<P> rtemp;
-    BlindRotate<typename BlindRotateParam<P>::P>(rtemp, temp, ek.getbkfft<lvl01param>(),
-                                                 aoi3testvecgen<P>());
+    BlindRotate<typename BlindRotateParam<P>::P>(
+        rtemp, temp, ek.getbkfft<lvl01param>(), aoi3testvecgen<P>());
     SampleExtractIndex<P>(res, rtemp, 0);
 }
 #define INST(P)                                                    \
@@ -317,7 +323,8 @@ void HomOA3(TLWE<lvl1param> &res, const TLWE<lvl1param> &ca,
     TLWE<lvl0param> temp;
     IdentityKeySwitch<lvl10param>(temp, res, ek.getiksk<lvl10param>());
     TRLWE<lvl1param> rtemp;
-    BlindRotate<lvl01param>(rtemp, temp, ek.getbkfft<lvl01param>(), aoi3testvecgen<P>());
+    BlindRotate<lvl01param>(rtemp, temp, ek.getbkfft<lvl01param>(),
+                            aoi3testvecgen<P>());
     SampleExtractIndex<lvl1param>(res, rtemp, lvl1param::n - lvl1param::n / 3);
 }
 #define INST(P)                                                   \
