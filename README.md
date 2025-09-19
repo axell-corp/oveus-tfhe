@@ -13,9 +13,9 @@ This repository contains some codes implementing the contents of AXELL CORPORATI
 Below is the README for TFHEpp.
 
 # TFHEpp
-TFHEpp is a full scratched pure C++ version of TFHE. TFHEpp is slightly(about 10%) faster than the original [TFHE implementation](https://github.com/tfhe/tfhe). In addition to that, THFEpp supports [Circuit Bootstrapping](https://eprint.iacr.org/2018/421), [Programable Boootstrapping many LUT](https://eprint.iacr.org/2021/729), Partial Key([Klemsa's version](https://eprint.iacr.org/2021/634), [Zama's version](https://eprint.iacr.org/2023/979) . Named as subset key in the code), and [Modifed Chen's Packing](https://eprint.iacr.org/2024/1318) (We call it as annihilate key switching in our code), [mean compensation in rounding noises](https://eprint.iacr.org/2025/809). 
-We also include partial support for B/FV, written in include/bfv++.hpp.
-TFHEpp depends on AVX2 because we use SPQLIOS FMA. If you want run TFHEpp without AVX2, see spqlios++ branch. It include pure C++ implementation of SPQLIOS as header only library, but slow.
+TFHEpp is a full scratched pure C++ version of TFHE. TFHEpp is slightly(about 10%) faster than the original [TFHE implementation](https://github.com/tfhe/tfhe). In addition to that, THFEpp supports [Circuit Bootstrapping](https://eprint.iacr.org/2018/421), [Programable Boootstrapping many LUT](https://eprint.iacr.org/2021/729), Partial Key([Klemsa's version](https://eprint.iacr.org/2021/634), [Zama's version](https://eprint.iacr.org/2023/979) . Named as subset key in the code), and [Modified Chen's Packing](https://eprint.iacr.org/2024/1318) (We call it as annihilate key switching in our code), [mean compensation in rounding noises](https://eprint.iacr.org/2025/809). 
+We also include partial support for B/FV, written in include/bfv++.hpp. For the implementation of the Modified Chen's Packing, we also used the idea of [dividing TRLWE at each recursion](https://eprint.iacr.org/2025/1088), though I developed that independently. 
+TFHEpp depends on AVX2 because we use SPQLIOS FMA. If you want to run TFHEpp without AVX2, see the spqlios++ branch. It includes a pure C++ implementation of SPQLIOS as a header-only library, but it is slow. 
 
 # Supported Compiler
 
@@ -54,6 +54,9 @@ SPQLIOS is the FFT library using AVX2 dedicated to the ring R\[X\]/(X^N+1) for N
 
 ## SPQLIOS-AVX512
 This AVX512 version of SPQLIOS developed in [MOSFHET](https://github.com/antoniocgj/MOSFHET). I confirmed this is faster than SPQLIOS on Intel i5-11400 and AMD Ryzen 7700X. 
+
+## SPQlios-Arithmetic
+[SPQlios Arithmetic](https://github.com/tfhe/spqlios-arithmetic) seems to be the successor of SPQLIOS. Currently, only FFT is supported. 
 
 ## FFTW3
 [FFTW](https://www.fftw.org/) is one of the most famous FFT libraries. 
