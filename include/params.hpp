@@ -259,7 +259,6 @@ using relinKeyFFT = aligned_array<TRLWEInFD<P>, P::l * P::l̅>;
 #define TFHEPP_EXPLICIT_INSTANTIATION_BLIND_ROTATE(fun) \
     fun(lvl01param);                                    \
     fun(lvl02param);                                    \
-    fun(lvl0Mparam);                                    \
     fun(lvlh2param);                                    \
     fun(cblvl02param);                                  \
     fun(cblvlh2param);
