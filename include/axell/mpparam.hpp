@@ -106,23 +106,13 @@ struct lvlMparam {
 };
 #endif
 
-#ifdef USE_CONCRETE
 struct lvlM0param {
-    static constexpr std::uint32_t t = 5;
-    static constexpr std::uint32_t basebit = 2;
+    static constexpr std::uint32_t t = lvl10param::t;
+    static constexpr std::uint32_t basebit = lvl10param::basebit;
     static const inline double α = lvl0param::α;
     using domainP = lvlMparam;
     using targetP = lvl0param;
 };
-#else
-struct lvlM0param {
-    static constexpr std::uint32_t t = 4;
-    static constexpr std::uint32_t basebit = 3;
-    static const inline double α = lvl0param::α;
-    using domainP = lvlMparam;
-    using targetP = lvl0param;
-};
-#endif
 
 struct lvl0Mparam {
     using domainP = lvl0param;
