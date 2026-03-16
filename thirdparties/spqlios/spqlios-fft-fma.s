@@ -1,4 +1,4 @@
-	.file	"spqlios-fft-avx.s"
+	.file	"spqlios-fft-fma.s"
 #if !__APPLE__
 	.section .note.GNU-stack,"",%progbits
 #endif
@@ -12,12 +12,7 @@ fft:
 	.globl	_fft
 _fft:
 #endif
-//c has size n/2
 //void fft(const void* tables, double* c) {
-
-//    FFT_PRECOMP* fft_tables = (FFT_PRECOMP*) tables;
-//    const int32_t n = fft_tables->n;
-//    const double* trig_tables = fft_tables->trig_tables;
 
 	/* Save registers */
 	pushq       %r10
@@ -26,209 +21,171 @@ _fft:
 	pushq       %r13
 	pushq       %r14
 	pushq       %rbx
-	
+
 	/* Permute registers for better variable names */
 	movq        %rdi, %rax
 	movq        %rsi, %rdi      /* rdi: base of the real data CONSTANT */
-	
+
 	/* Load struct FftTables fields */
-	movq         0(%rax), %rdx  /* rdx: n (logical Size of _fft  = a power of 2, must be at least 4) */
-	movq         8(%rax), %r8   /* r8: Base address of trigonometric tables array (CONSTANT) */
-	
-//    int32_t ns4 = n/4;
-//    double* pre = c;     //size n/4
-//    double* pim = c+ns4; //size n/4
+	movq         0(%rax), %rdx  /* rdx: n */
+	movq         8(%rax), %r8   /* r8: trig_tables base (CONSTANT) */
+
 	movq	%rdx, %r9
 	shr	$2,%r9              /* r9: ns4 CONSTANT */
 	leaq	(%rdi,%r9,8),%rsi   /* rsi: base of imaginary data CONSTANT */
 
-//    //size 2
-//    {
-//	//[1  1]
-//	//[1 -1]
-//	//     [1  1]
-//	//     [1 -1]
-//	for (int32_t block=0; block<ns4; block+=4) {
-//	    double* d0 = pre+block;
-//	    double* d1 = pim+block;
-//	    tmp0[0]=d0[0];
-//	    tmp0[1]=d0[0];
-//	    tmp0[2]=d0[2];
-//	    tmp0[3]=d0[2];
-//	    tmp1[0]=d0[1];
-//	    tmp1[1]=-d0[1];
-//	    tmp1[2]=d0[3];
-//	    tmp1[3]=-d0[3];
-//	    add4(d0,tmp0,tmp1);
-//	    tmp0[0]=d1[0];
-//	    tmp0[1]=d1[0];
-//	    tmp0[2]=d1[2];
-//	    tmp0[3]=d1[2];
-//	    tmp1[0]=d1[1];
-//	    tmp1[1]=-d1[1];
-//	    tmp1[2]=d1[3];
-//	    tmp1[3]=-d1[3];
-//	    add4(d1,tmp0,tmp1);
-//	}
-//    }
-	vmovapd     size4negation0(%rip), %ymm15
-	vmovapd     size4negation1(%rip), %ymm14
-	vmovapd     size4negation2(%rip), %ymm13
-	vmovapd     size4negation3(%rip), %ymm12
-	
-	movq	$0,%rax	/* rax: block */
+# ── Fused size-2 + size-4 + size-8 (halfnn=4) pass ───────────────────────────
+# Processes 8 doubles per iteration (2 consecutive YMM blocks).
+# Does all 3 stages in-register: load once, store once.
+# Saves 2 full load-store round trips vs separate passes.
+#
+# Register map:
+#   ymm15 = [+1,-1,+1,-1]  (size-2 negation)
+#   ymm14 = [+1,-1,-1,+1]  (size-4 im)
+#   ymm13 = [+1,+1,-1,-1]  (size-4 re)
+#   ymm12 = fftsize8cos     (size-8 twiddle cos)
+#   ymm11 = fftsize8sin     (size-8 twiddle sin)
+#   ymm0-10 = data and temps
+	vmovapd     fft_negmask_s2(%rip), %ymm15
+	vmovapd     fft_negmask_s4im(%rip), %ymm14
+	vmovapd     fft_negmask_s4re(%rip), %ymm13
+	vmovapd     fft_s8cos(%rip), %ymm12
+	vmovapd     fft_s8sin(%rip), %ymm11
+
 	movq	%rdi,%r10
 	movq	%rsi,%r11
-fftsize2loop:
-	vmovapd (%r10),%ymm0 /* r0 r1 r2 r3 */
-	vmovapd (%r11),%ymm1 /* i0 i1 i2 i3 */
-	vshufpd $0,%ymm0,%ymm0,%ymm2  /* r0 r0 r2 r2 */
-	vshufpd $15,%ymm0,%ymm0,%ymm3 /* r1 r1 r3 r3 */
-	vshufpd $0,%ymm1,%ymm1,%ymm4  /* i0 i0 i2 i2 */
-	vshufpd $15,%ymm1,%ymm1,%ymm5 /* i1 i1 i3 i3 */
-	vfmadd231pd %ymm3,%ymm12,%ymm2 /* (r0 r0 r2 r2) + (r1 -r1 r3 -r3) */
-	vfmadd231pd %ymm5,%ymm12,%ymm4 /* (i0 i0 i2 i2) + (i1 -i1 i3 -i3) */
-	vmovapd %ymm2,(%r10)
-	vmovapd %ymm4,(%r11)
-	/* end of loop */
-        leaq 32(%r10),%r10
-        leaq 32(%r11),%r11
-        addq $4,%rax
+	movq	$0,%rax
+.p2align 4
+fft_fused_248:
+	# Load 2 consecutive blocks (8 re + 8 im = 4 YMM)
+	vmovapd (%r10),%ymm0         /* re[0..3] */
+	vmovapd 32(%r10),%ymm1       /* re[4..7] */
+	vmovapd (%r11),%ymm2         /* im[0..3] */
+	vmovapd 32(%r11),%ymm3       /* im[4..7] */
+
+	# ── Size-2 butterfly on all 4 YMMs ──
+	# [a0,a1,a2,a3] → [a0+a1, a0-a1, a2+a3, a2-a3]
+	vshufpd $0,%ymm0,%ymm0,%ymm4
+	vshufpd $15,%ymm0,%ymm0,%ymm0
+	vfmadd231pd %ymm0,%ymm15,%ymm4   /* re_lo after s2 */
+	vshufpd $0,%ymm1,%ymm1,%ymm5
+	vshufpd $15,%ymm1,%ymm1,%ymm1
+	vfmadd231pd %ymm1,%ymm15,%ymm5   /* re_hi after s2 */
+	vshufpd $0,%ymm2,%ymm2,%ymm6
+	vshufpd $15,%ymm2,%ymm2,%ymm2
+	vfmadd231pd %ymm2,%ymm15,%ymm6   /* im_lo after s2 */
+	vshufpd $0,%ymm3,%ymm3,%ymm7
+	vshufpd $15,%ymm3,%ymm3,%ymm3
+	vfmadd231pd %ymm3,%ymm15,%ymm7   /* im_hi after s2 */
+
+	# ── Size-4 butterfly, pair 0: (ymm4=re_lo, ymm6=im_lo) → (ymm0, ymm2) ──
+	vperm2f128 $0x20,%ymm4,%ymm4,%ymm0   /* dup low re  */
+	vperm2f128 $0x20,%ymm6,%ymm6,%ymm2   /* dup low im  */
+	vperm2f128 $0x31,%ymm4,%ymm4,%ymm8   /* dup high re */
+	vperm2f128 $0x31,%ymm6,%ymm6,%ymm9   /* dup high im */
+	vshufpd $10,%ymm9,%ymm8,%ymm10       /* [re_h, im_h', re_h, im_h'] */
+	vshufpd $10,%ymm8,%ymm9,%ymm9        /* [im_h, re_h', im_h, re_h'] */
+	vfmadd231pd %ymm10,%ymm13,%ymm0      /* re_lo result */
+	vfmadd231pd %ymm9,%ymm14,%ymm2       /* im_lo result */
+
+	# ── Size-4 butterfly, pair 1: (ymm5=re_hi, ymm7=im_hi) → (ymm4, ymm6) ──
+	vperm2f128 $0x20,%ymm5,%ymm5,%ymm4   /* dup low re  */
+	vperm2f128 $0x20,%ymm7,%ymm7,%ymm6   /* dup low im  */
+	vperm2f128 $0x31,%ymm5,%ymm5,%ymm8   /* dup high re */
+	vperm2f128 $0x31,%ymm7,%ymm7,%ymm9   /* dup high im */
+	vshufpd $10,%ymm9,%ymm8,%ymm10       /* mix re/im high */
+	vshufpd $10,%ymm8,%ymm9,%ymm9        /* mix im/re high */
+	vfmadd231pd %ymm10,%ymm13,%ymm4      /* re_hi result */
+	vfmadd231pd %ymm9,%ymm14,%ymm6       /* im_hi result */
+
+	# ── Size-8 butterfly across the two blocks ──
+	# re2 = re_hi*cos - im_hi*sin
+	# im2 = re_hi*sin + im_hi*cos
+	vmulpd	%ymm4,%ymm12,%ymm8           /* re_hi * cos */
+	vmulpd	%ymm4,%ymm11,%ymm9           /* re_hi * sin */
+	vfnmadd231pd %ymm6,%ymm11,%ymm8     /* re2 = re_hi*cos - im_hi*sin */
+	vfmadd231pd  %ymm6,%ymm12,%ymm9     /* im2 = re_hi*sin + im_hi*cos */
+	vsubpd	%ymm8,%ymm0,%ymm4            /* new re_hi = re_lo - re2 */
+	vsubpd	%ymm9,%ymm2,%ymm6            /* new im_hi = im_lo - im2 */
+	vaddpd	%ymm8,%ymm0,%ymm0            /* new re_lo = re_lo + re2 */
+	vaddpd	%ymm9,%ymm2,%ymm2            /* new im_lo = im_lo + im2 */
+
+	# Store
+	vmovapd %ymm0,(%r10)
+	vmovapd %ymm4,32(%r10)
+	vmovapd %ymm2,(%r11)
+	vmovapd %ymm6,32(%r11)
+	leaq 64(%r10),%r10
+	leaq 64(%r11),%r11
+	addq $8,%rax
 	cmpq %r9,%rax
-	jb fftsize2loop
-	
-//
-//    //size 4
-//    //[1  0  1  0]
-//    //[0  1  0 -i]
-//    //[1  0 -1  0]
-//    //[0  1  0  i]
-//    // r0 + r2    i0 + i2
-//    // r1 + i3    i1 - r3
-//    // r0 - r2    i0 - i2
-//    // r1 - i3    i1 + r3
-//    {
-//	for (int32_t block=0; block<ns4; block+=4) {
-//	    double* re = pre+block;
-//	    double* im = pim+block;
-//	    tmp0[0]=re[0];
-//	    tmp0[1]=re[1];
-//	    tmp0[2]=re[0];
-//	    tmp0[3]=re[1];
-//	    tmp1[0]=re[2];
-//	    tmp1[1]=im[3];
-//	    tmp1[2]=-re[2];
-//	    tmp1[3]=-im[3];
-//	    tmp2[0]=im[0];
-//	    tmp2[1]=im[1];
-//	    tmp2[2]=im[0];
-//	    tmp2[3]=im[1];
-//	    tmp3[0]=im[2];
-//	    tmp3[1]=-re[3];
-//	    tmp3[2]=-im[2];
-//	    tmp3[3]=re[3];
-//	    add4(re,tmp0,tmp1);
-//	    add4(im,tmp2,tmp3);
-//	}
-//    }
-	movq	$0, %rax
-	movq	%rdi,%r10
-	movq	%rsi,%r11
-fftsize4loop:
-	vmovapd (%r10),%ymm0 /* r0 r1 r2 r3 */
-	vmovapd (%r11),%ymm1 /* i0 i1 i2 i3 */
-	vperm2f128 $32,%ymm0,%ymm0,%ymm4 /* r0 r1 r0 r1 */
-	vperm2f128 $32,%ymm1,%ymm1,%ymm5 /* i0 i1 i0 i1 */
-	vperm2f128 $49,%ymm0,%ymm0,%ymm6 /* r2 r3 r2 r3 */
-	vperm2f128 $49,%ymm1,%ymm1,%ymm7 /* i2 i3 i2 i3 */
-	vshufpd $10,%ymm7,%ymm6,%ymm8    /* r2 i3 r2 i3 */
-	vshufpd $10,%ymm6,%ymm7,%ymm9    /* i2 r3 i2 r3 */
-	vfmadd231pd %ymm8,%ymm13,%ymm4   /* (r0 r1 r0 r1) + (r2 i3 -r2 -i3) */
-	vfmadd231pd %ymm9,%ymm14,%ymm5   /* (i0 i1 i0 i1) + (i2 -r3 -i2 r3) */
-	vmovapd %ymm4,(%r10)
-  	vmovapd %ymm5,(%r11)
-        /* end of loop */
-        leaq 32(%r10),%r10
-        leaq 32(%r11),%r11
-        addq $4,%rax
-	cmpq %r9,%rax
-	jb fftsize4loop
+	jb fft_fused_248
 
+# ── General butterfly loop, starting from halfnn=8 ───────────────────────────
+# (halfnn=4 was handled by the fused pass above)
+# Skip the first trig table entry (halfnn=4: 1 group × 8 doubles = 64 bytes)
+	leaq	64(%r8),%rdx      /* rdx: cur_tt, skip halfnn=4 entry */
+	movq	$8,%rax           /* rax: halfnn, start at 8 */
 
-//    
-//    //general loop
-//    const double* cur_tt = trig_tables;
-//    for (int32_t halfnn=4; halfnn<ns4; halfnn*=2) {
-//	int32_t nn = 2*halfnn;
-//	for (int32_t block=0; block<ns4; block+=nn) {
-//	    for (int32_t off=0; off<halfnn; off+=4) {
-//		double* re0 = pre + block + off;
-//		double* im0 = pim + block + off;
-//		double* re1 = pre + block + halfnn + off;
-//		double* im1 = pim + block + halfnn + off;
-//		const double* tcs = cur_tt+2*off;
-//		const double* tsn = tcs+4;
-//		dotp4(tmp0,re1,tcs); // re*cos
-//		dotp4(tmp1,re1,tsn); // re*sin
-//		dotp4(tmp2,im1,tcs); // im*cos
-//		dotp4(tmp3,im1,tsn); // im*sin
-//		sub4(tmp0,tmp0,tmp3); // re2
-//		add4(tmp1,tmp1,tmp2); // im2
-//		add4(tmp2,re0,tmp0); // re + re
-//		add4(tmp3,im0,tmp1); // im + im
-//		sub4(tmp0,re0,tmp0); // re - re
-//		sub4(tmp1,im0,tmp1); // im - im
-//		copy4(re0,tmp2);
-//		copy4(im0,tmp3);
-//		copy4(re1,tmp0);
-//		copy4(im1,tmp1);
-//	    }
-//	}
-//	cur_tt += nn;
-//    }
+	# Check if we should fuse the last butterfly with the final twist
+	# For the last halfnn iteration (halfnn == ns4/2), fuse with twist
+	movq	%r9,%rbx
+	shr	$1,%rbx           /* rbx = ns4/2 = last halfnn value */
+	cmpq	$8,%rbx
+	jb	fftbeforefinal    /* ns4 < 16: no general loop at all */
 
-	movq %r8,%rdx /* rdx: cur_tt */
-	movq $4,%rax /* rax: halfnn */
 ffthalfnnloop:
-	movq $0,%rbx /* rbx: block */
+	cmpq	%rbx,%rax         /* is this the last halfnn? */
+	je	fft_last_halfnn_fused /* yes: fuse with final twist */
+	movq $0,%rcx              /* rcx: block */
 fftblockloop:
-	leaq (%rdi,%rbx,8),%r10 /* re0 pointer */
-	leaq (%rsi,%rbx,8),%r11 /* im0 pointer */
-	leaq (%r10,%rax,8),%r12 /* re1 pointer */
-	leaq (%r11,%rax,8),%r13 /* im1 pointer */
-	movq %rdx,%r14          /* tcs pointer */
-	movq $0,%rcx /* rcx: off */
+	leaq (%rdi,%rcx,8),%r10   /* re0 pointer */
+	leaq (%rsi,%rcx,8),%r11   /* im0 pointer */
+	leaq (%r10,%rax,8),%r12   /* re1 pointer */
+	leaq (%r11,%rax,8),%r13   /* im1 pointer */
+	movq %rdx,%r14            /* tcs pointer */
+	movq $0,%r13              /* r13: off (reuse) */
+	leaq (%r10,%rax,8),%r12   /* re1 pointer */
+	leaq (%r11,%rax,8),%r13   /* im1 pointer - wait, r13 reuse conflict */
+
+	/* Redo properly - r13 was clobbered, use different approach */
+	leaq (%rdi,%rcx,8),%r10
+	leaq (%rsi,%rcx,8),%r11
+	leaq (%r10,%rax,8),%r12
+	leaq (%r11,%rax,8),%r13
+	movq %rdx,%r14
+	pushq %rcx                /* save block counter */
+	movq $0,%rcx
 fftoffloop:
-	vmovapd (%r10),%ymm0 /* re0 */
-	vmovapd (%r11),%ymm1 /* im0 */
-	vmovapd (%r12),%ymm2 /* re1 */
-	vmovapd (%r13),%ymm3 /* im1 */
-	vmovapd (%r14),%ymm4 /* cos */
-	vmovapd 32(%r14),%ymm5 /* sin */
-	vmulpd	%ymm2,%ymm4,%ymm6 /* re1.cos */
-	vmulpd	%ymm2,%ymm5,%ymm7 /* re1.sin */
-        vfnmadd231pd %ymm3,%ymm5,%ymm6 /* re2 = re1.cos - im1.sin */ 
-        vfmadd231pd %ymm3,%ymm4,%ymm7  /* im2 = re1.sin + im1.cos */ 
-	vsubpd	%ymm6,%ymm0,%ymm2 /* re0 - re2 */
-	vsubpd	%ymm7,%ymm1,%ymm3 /* im0 - im2 */
-	vaddpd	%ymm6,%ymm0,%ymm0 /* re0 + re2 */
-	vaddpd	%ymm7,%ymm1,%ymm1 /* im0 + im2 */
+	vmovapd (%r10),%ymm0     /* re0 */
+	vmovapd (%r11),%ymm1     /* im0 */
+	vmovapd (%r12),%ymm2     /* re1 */
+	vmovapd (%r13),%ymm3     /* im1 */
+	vmovapd (%r14),%ymm4     /* cos */
+	vmovapd 32(%r14),%ymm5   /* sin */
+	vmulpd	%ymm2,%ymm4,%ymm6
+	vmulpd	%ymm2,%ymm5,%ymm7
+	vfnmadd231pd %ymm3,%ymm5,%ymm6
+	vfmadd231pd %ymm3,%ymm4,%ymm7
+	vsubpd	%ymm6,%ymm0,%ymm2
+	vsubpd	%ymm7,%ymm1,%ymm3
+	vaddpd	%ymm6,%ymm0,%ymm0
+	vaddpd	%ymm7,%ymm1,%ymm1
 	vmovapd %ymm0,(%r10)
 	vmovapd %ymm1,(%r11)
 	vmovapd %ymm2,(%r12)
 	vmovapd %ymm3,(%r13)
-        /* end of off loop */
-    	leaq 	32(%r10),%r10
-    	leaq	32(%r11),%r11
-    	leaq 	32(%r12),%r12
-    	leaq 	32(%r13),%r13
+	leaq 	32(%r10),%r10
+	leaq	32(%r11),%r11
+	leaq 	32(%r12),%r12
+	leaq 	32(%r13),%r13
 	leaq 	64(%r14),%r14
 	addq 	$4,%rcx
 	cmpq	%rax,%rcx
 	jb 	fftoffloop
-	/* end of block loop */
-	leaq	(%rbx,%rax,2),%rbx
-	cmpq	%r9,%rbx
+	popq    %rcx              /* restore block counter */
+	leaq	(%rcx,%rax,2),%rcx
+	cmpq	%r9,%rcx
 	jb 	fftblockloop
 	/* end of halfnn loop */
 	shlq	$1,%rax
@@ -236,47 +193,98 @@ fftoffloop:
 	cmpq	%r9,%rax
 	jb ffthalfnnloop
 
-//    //multiply by omb^j
-//    for (int32_t j=0; j<ns4; j+=4) {
-//	const double* r0 = cur_tt+2*j;
-//	const double* r1 = r0+4;
-//	//(re*cos-im*sin) + i (im*cos+re*sin)
-//	double* d0 = pre+j;
-//	double* d1 = pim+j;
-//	dotp4(tmp0,d0,r0); //re*cos
-//	dotp4(tmp1,d1,r0); //im*cos
-//	dotp4(tmp2,d0,r1); //re*sin
-//	dotp4(tmp3,d1,r1); //im*sin
-//	sub4(d0,tmp0,tmp3);
-//	add4(d1,tmp1,tmp2);
-//    }
-//}
+fftbeforefinal:
 	/* cur_tt is at rdx */
-	movq $0,%rax /* j */
+	movq $0,%rax
 	movq %rdi,%r10
 	movq %rsi,%r11
 fftfinalloop:
-	vmovapd	(%r10),%ymm0 /* re */
-	vmovapd	(%r11),%ymm1 /* im */
-	vmovapd (%rdx),%ymm2 /* cos */
-	vmovapd 32(%rdx),%ymm3 /* sin */
-	vmulpd %ymm0,%ymm2,%ymm4        /* re*cos */
-	vmulpd %ymm0,%ymm3,%ymm5        /* re*sin */
-	vfnmadd231pd %ymm1,%ymm3,%ymm4  /* re*cos - im*sin */
-	vfmadd231pd %ymm1,%ymm2,%ymm5   /* re*sin + im*cos */
-	vmovapd %ymm4,%ymm0
-	vmovapd %ymm5,%ymm1
-	vmovapd %ymm0,(%r10)
-	vmovapd %ymm1,(%r11)
-    	/* end of final loop */
-    	leaq	32(%r10),%r10
-    	leaq	32(%r11),%r11
-    	leaq	64(%rdx),%rdx
+	vmovapd	(%r10),%ymm0
+	vmovapd	(%r11),%ymm1
+	vmovapd (%rdx),%ymm2
+	vmovapd 32(%rdx),%ymm3
+	vmulpd %ymm0,%ymm2,%ymm4
+	vmulpd %ymm0,%ymm3,%ymm5
+	vfnmadd231pd %ymm1,%ymm3,%ymm4
+	vfmadd231pd %ymm1,%ymm2,%ymm5
+	vmovapd %ymm4,(%r10)
+	vmovapd %ymm5,(%r11)
+	leaq	32(%r10),%r10
+	leaq	32(%r11),%r11
+	leaq	64(%rdx),%rdx
 	addq	$4,%rax
 	cmpq	%r9,%rax
 	jb fftfinalloop
+	jmp	fftend
 
-	/* Restore registers */
+# ── Fused last butterfly + final twist ────────────────────────────────────────
+# Instead of doing the last halfnn butterfly, storing, reloading for twist,
+# we compute both in-register, saving one full pass through the data.
+fft_last_halfnn_fused:
+	# rax = halfnn (the last value), rdx = butterfly trig pointer
+	# After butterfly trig, the twist trig starts at rdx + halfnn*16 bytes
+	leaq (%rdx,%rax,8),%r10
+	leaq (%r10,%rax,8),%r10   /* r10 = twist trig base */
+	# For the last halfnn: 1 block, halfnn/4 inner iterations
+	# re0 = rdi, im0 = rsi, re1 = rdi+halfnn*8, im1 = rsi+halfnn*8
+	movq %rdi,%r11            /* r11 = re0 */
+	movq %rsi,%r12            /* r12 = im0 */
+	leaq (%rdi,%rax,8),%r13   /* r13 = re1 = rdi + halfnn*8 */
+	leaq (%rsi,%rax,8),%r14   /* r14 = im1 = rsi + halfnn*8 */
+	movq $0,%rcx
+.p2align 4
+fft_last_fused_loop:
+	# Butterfly
+	vmovapd (%r11),%ymm0     /* re0 */
+	vmovapd (%r12),%ymm1     /* im0 */
+	vmovapd (%r13),%ymm2     /* re1 */
+	vmovapd (%r14),%ymm3     /* im1 */
+	vmovapd (%rdx),%ymm4     /* bf cos */
+	vmovapd 32(%rdx),%ymm5   /* bf sin */
+	vmulpd	%ymm2,%ymm4,%ymm6
+	vmulpd	%ymm2,%ymm5,%ymm7
+	vfnmadd231pd %ymm3,%ymm5,%ymm6   /* re2 */
+	vfmadd231pd %ymm3,%ymm4,%ymm7    /* im2 */
+	vsubpd	%ymm6,%ymm0,%ymm2         /* new_re1 = re0 - re2 */
+	vsubpd	%ymm7,%ymm1,%ymm3         /* new_im1 = im0 - im2 */
+	vaddpd	%ymm6,%ymm0,%ymm0         /* new_re0 = re0 + re2 */
+	vaddpd	%ymm7,%ymm1,%ymm1         /* new_im0 = im0 + im2 */
+
+	# Twist on output 0 (position = off)
+	vmovapd (%r10),%ymm4              /* tw0 cos */
+	vmovapd 32(%r10),%ymm5            /* tw0 sin */
+	vmulpd %ymm0,%ymm4,%ymm6         /* re0*cos */
+	vmulpd %ymm0,%ymm5,%ymm7         /* re0*sin */
+	vfnmadd231pd %ymm1,%ymm5,%ymm6   /* re0*cos - im0*sin */
+	vfmadd231pd %ymm1,%ymm4,%ymm7    /* re0*sin + im0*cos */
+	vmovapd %ymm6,(%r11)
+	vmovapd %ymm7,(%r12)
+
+	# Twist on output 1 (position = off + halfnn)
+	# Twist trig offset: halfnn*16 bytes from tw0 base
+	leaq (%r10,%rax,8),%rbx
+	leaq (%rbx,%rax,8),%rbx           /* rbx = tw1 = r10 + halfnn*16 */
+	vmovapd (%rbx),%ymm4              /* tw1 cos */
+	vmovapd 32(%rbx),%ymm5            /* tw1 sin */
+	vmulpd %ymm2,%ymm4,%ymm6
+	vmulpd %ymm2,%ymm5,%ymm7
+	vfnmadd231pd %ymm3,%ymm5,%ymm6
+	vfmadd231pd %ymm3,%ymm4,%ymm7
+	vmovapd %ymm6,(%r13)
+	vmovapd %ymm7,(%r14)
+
+	# Advance
+	leaq 32(%r11),%r11
+	leaq 32(%r12),%r12
+	leaq 32(%r13),%r13
+	leaq 32(%r14),%r14
+	leaq 64(%rdx),%rdx        /* butterfly trig */
+	leaq 64(%r10),%r10        /* twist trig */
+	addq $4,%rcx
+	cmpq %rax,%rcx
+	jb fft_last_fused_loop
+	/* done - skip fftfinalloop */
+
 fftend:
 	vzeroall
 	popq        %rbx
@@ -290,10 +298,12 @@ fftend:
 
 /* Constants for YMM */
 .balign 32
-size4negation0: .double +1.0, +1.0, +1.0, -1.0 /* ymm15 */
-size4negation1: .double +1.0, -1.0, -1.0, +1.0 /* ymm14 */
-size4negation2: .double +1.0, +1.0, -1.0, -1.0 /* ymm13 */
-size4negation3: .double +1.0, -1.0, +1.0, -1.0 /* ymm12 */
+fft_negmask_s2:    .double +1.0, -1.0, +1.0, -1.0
+fft_negmask_s4im:  .double +1.0, -1.0, -1.0, +1.0
+fft_negmask_s4re:  .double +1.0, +1.0, -1.0, -1.0
+/* FFT size-8 twiddle: cos/sin(-2pi*k/8) for k=0..3 */
+fft_s8cos: .double +1.0, +0.7071067811865476, +0.0, -0.7071067811865476
+fft_s8sin: .double +0.0, -0.7071067811865476, -1.0, -0.7071067811865476
 
 #if !__APPLE__
 	.size	fft, .-fft
