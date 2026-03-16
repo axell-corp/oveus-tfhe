@@ -31,11 +31,24 @@ alignas(64) const TRGSWFFT<lvl2param> trgswonelvl2 =
 // in one pass, avoiding full TRLWE temp allocation and separate add-back loop.
 template <class P>
 void CMUXFFTwithPolynomialMulByXaiMinusOne(
-    TRLWE<P> &acc, const TRGSWFFT<P> &trgswfft, const typename P::T a)
+    TRLWE<P> &acc, const TRGSWFFT<P> &trgswfft, const typename P::T a,
+    const TRGSWFFT<P> *next_trgswfft = nullptr)
 {
     alignas(64) TRLWEInFD<P> restrlwefft;
     alignas(64) Polynomial<P> rotated;
     alignas(64) PolynomialInFD<P> decpolyfft;
+
+    // Prefetch the next bootstrapping key element into L2/L3 cache.
+    // Each TRGSWFFT element is large (~96KB for default params). Prefetch
+    // the first portion; the hardware sequential prefetcher handles the rest.
+    if (next_trgswfft) {
+        const char *ptr = reinterpret_cast<const char *>(next_trgswfft);
+        constexpr size_t prefetch_bytes = 32768;  // 32KB into L2
+        constexpr size_t limit =
+            sizeof(TRGSWFFT<P>) < prefetch_bytes ? sizeof(TRGSWFFT<P>) : prefetch_bytes;
+        for (size_t offset = 0; offset < limit; offset += 64)
+            __builtin_prefetch(ptr + offset, 0, 2);
+    }
 
     // --- Nonce part: k_idx=0, initialize with MulInFD ---
     PolynomialMulByXaiMinusOne<P>(rotated, acc[0], a);
@@ -86,11 +99,12 @@ void CMUXFFTwithPolynomialMulByXaiMinusOne(
 template <class bkP>
 void CMUXwithPolynomialMulByXaiMinusOne(
     TRLWE<typename bkP::targetP> &acc,
-    const BootstrappingKeyElementFFT<bkP> &cs, const int a)
+    const BootstrappingKeyElementFFT<bkP> &cs, const int a,
+    const TRGSWFFT<typename bkP::targetP> *next_trgswfft = nullptr)
 {
     if constexpr (bkP::domainP::key_value_diff == 1) {
         CMUXFFTwithPolynomialMulByXaiMinusOne<typename bkP::targetP>(
-            acc, cs[0], a);
+            acc, cs[0], a, next_trgswfft);
     }
     else {
 #ifdef USE_TERNARY_CMUX

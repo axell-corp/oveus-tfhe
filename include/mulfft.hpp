@@ -243,17 +243,27 @@ inline void MulInFD(std::array<double, N> &res, const std::array<double, N> &b)
 #elif defined(__AVX2__) && !defined(__AVX512F__)
     double *rre = res.data(), *rim = res.data() + N / 2;
     const double *bre = b.data(), *bim = b.data() + N / 2;
-    for (uint32_t i = 0; i < N / 2; i += 4) {
-        __m256d va_re = _mm256_load_pd(rre + i);
-        __m256d va_im = _mm256_load_pd(rim + i);
-        __m256d vb_re = _mm256_load_pd(bre + i);
-        __m256d vb_im = _mm256_load_pd(bim + i);
-        __m256d vr_re = _mm256_mul_pd(va_re, vb_re);
-        vr_re = _mm256_fnmadd_pd(va_im, vb_im, vr_re);
-        __m256d vr_im = _mm256_mul_pd(va_im, vb_re);
-        vr_im = _mm256_fmadd_pd(va_re, vb_im, vr_im);
-        _mm256_store_pd(rre + i, vr_re);
-        _mm256_store_pd(rim + i, vr_im);
+    for (uint32_t i = 0; i < N / 2; i += 8) {
+        __m256d va_re0 = _mm256_load_pd(rre + i);
+        __m256d va_im0 = _mm256_load_pd(rim + i);
+        __m256d vb_re0 = _mm256_load_pd(bre + i);
+        __m256d vb_im0 = _mm256_load_pd(bim + i);
+        __m256d va_re1 = _mm256_load_pd(rre + i + 4);
+        __m256d va_im1 = _mm256_load_pd(rim + i + 4);
+        __m256d vb_re1 = _mm256_load_pd(bre + i + 4);
+        __m256d vb_im1 = _mm256_load_pd(bim + i + 4);
+        __m256d vr_re0 = _mm256_mul_pd(va_re0, vb_re0);
+        __m256d vr_re1 = _mm256_mul_pd(va_re1, vb_re1);
+        vr_re0 = _mm256_fnmadd_pd(va_im0, vb_im0, vr_re0);
+        vr_re1 = _mm256_fnmadd_pd(va_im1, vb_im1, vr_re1);
+        __m256d vr_im0 = _mm256_mul_pd(va_im0, vb_re0);
+        __m256d vr_im1 = _mm256_mul_pd(va_im1, vb_re1);
+        vr_im0 = _mm256_fmadd_pd(va_re0, vb_im0, vr_im0);
+        vr_im1 = _mm256_fmadd_pd(va_re1, vb_im1, vr_im1);
+        _mm256_store_pd(rre + i, vr_re0);
+        _mm256_store_pd(rre + i + 4, vr_re1);
+        _mm256_store_pd(rim + i, vr_im0);
+        _mm256_store_pd(rim + i + 4, vr_im1);
     }
 #else
     for (int i = 0; i < N / 2; i++) {
@@ -297,17 +307,27 @@ inline void MulInFD(std::array<double, N> &res, const std::array<double, N> &a,
     const double *are = a.data(), *aim = a.data() + N / 2;
     const double *bre = b.data(), *bim = b.data() + N / 2;
     double *rre = res.data(), *rim = res.data() + N / 2;
-    for (uint32_t i = 0; i < N / 2; i += 4) {
-        __m256d va_re = _mm256_load_pd(are + i);
-        __m256d va_im = _mm256_load_pd(aim + i);
-        __m256d vb_re = _mm256_load_pd(bre + i);
-        __m256d vb_im = _mm256_load_pd(bim + i);
-        __m256d vr_re = _mm256_mul_pd(va_re, vb_re);
-        vr_re = _mm256_fnmadd_pd(va_im, vb_im, vr_re);
-        __m256d vr_im = _mm256_mul_pd(va_im, vb_re);
-        vr_im = _mm256_fmadd_pd(va_re, vb_im, vr_im);
-        _mm256_store_pd(rre + i, vr_re);
-        _mm256_store_pd(rim + i, vr_im);
+    for (uint32_t i = 0; i < N / 2; i += 8) {
+        __m256d va_re0 = _mm256_load_pd(are + i);
+        __m256d va_im0 = _mm256_load_pd(aim + i);
+        __m256d vb_re0 = _mm256_load_pd(bre + i);
+        __m256d vb_im0 = _mm256_load_pd(bim + i);
+        __m256d va_re1 = _mm256_load_pd(are + i + 4);
+        __m256d va_im1 = _mm256_load_pd(aim + i + 4);
+        __m256d vb_re1 = _mm256_load_pd(bre + i + 4);
+        __m256d vb_im1 = _mm256_load_pd(bim + i + 4);
+        __m256d vr_re0 = _mm256_mul_pd(va_re0, vb_re0);
+        __m256d vr_re1 = _mm256_mul_pd(va_re1, vb_re1);
+        vr_re0 = _mm256_fnmadd_pd(va_im0, vb_im0, vr_re0);
+        vr_re1 = _mm256_fnmadd_pd(va_im1, vb_im1, vr_re1);
+        __m256d vr_im0 = _mm256_mul_pd(va_im0, vb_re0);
+        __m256d vr_im1 = _mm256_mul_pd(va_im1, vb_re1);
+        vr_im0 = _mm256_fmadd_pd(va_re0, vb_im0, vr_im0);
+        vr_im1 = _mm256_fmadd_pd(va_re1, vb_im1, vr_im1);
+        _mm256_store_pd(rre + i, vr_re0);
+        _mm256_store_pd(rre + i + 4, vr_re1);
+        _mm256_store_pd(rim + i, vr_im0);
+        _mm256_store_pd(rim + i + 4, vr_im1);
     }
 #else
     for (int i = 0; i < N / 2; i++) {
@@ -359,19 +379,32 @@ inline void FMAInFD(std::array<double, N> &res, const std::array<double, N> &a,
     const double *are = a.data(), *aim = a.data() + N / 2;
     const double *bre = b.data(), *bim = b.data() + N / 2;
     double *rre = res.data(), *rim = res.data() + N / 2;
-    for (uint32_t i = 0; i < N / 2; i += 4) {
-        __m256d va_re = _mm256_load_pd(are + i);
-        __m256d va_im = _mm256_load_pd(aim + i);
-        __m256d vb_re = _mm256_load_pd(bre + i);
-        __m256d vb_im = _mm256_load_pd(bim + i);
-        __m256d vr_re = _mm256_load_pd(rre + i);
-        __m256d vr_im = _mm256_load_pd(rim + i);
-        vr_re = _mm256_fmadd_pd(va_re, vb_re, vr_re);
-        vr_re = _mm256_fnmadd_pd(va_im, vb_im, vr_re);
-        vr_im = _mm256_fmadd_pd(va_im, vb_re, vr_im);
-        vr_im = _mm256_fmadd_pd(va_re, vb_im, vr_im);
-        _mm256_store_pd(rre + i, vr_re);
-        _mm256_store_pd(rim + i, vr_im);
+    // 2x unrolled to improve ILP on Zen 2 (2 FMA units)
+    for (uint32_t i = 0; i < N / 2; i += 8) {
+        __m256d va_re0 = _mm256_load_pd(are + i);
+        __m256d va_im0 = _mm256_load_pd(aim + i);
+        __m256d vb_re0 = _mm256_load_pd(bre + i);
+        __m256d vb_im0 = _mm256_load_pd(bim + i);
+        __m256d vr_re0 = _mm256_load_pd(rre + i);
+        __m256d vr_im0 = _mm256_load_pd(rim + i);
+        __m256d va_re1 = _mm256_load_pd(are + i + 4);
+        __m256d va_im1 = _mm256_load_pd(aim + i + 4);
+        __m256d vb_re1 = _mm256_load_pd(bre + i + 4);
+        __m256d vb_im1 = _mm256_load_pd(bim + i + 4);
+        __m256d vr_re1 = _mm256_load_pd(rre + i + 4);
+        __m256d vr_im1 = _mm256_load_pd(rim + i + 4);
+        vr_re0 = _mm256_fmadd_pd(va_re0, vb_re0, vr_re0);
+        vr_re1 = _mm256_fmadd_pd(va_re1, vb_re1, vr_re1);
+        vr_re0 = _mm256_fnmadd_pd(va_im0, vb_im0, vr_re0);
+        vr_re1 = _mm256_fnmadd_pd(va_im1, vb_im1, vr_re1);
+        vr_im0 = _mm256_fmadd_pd(va_im0, vb_re0, vr_im0);
+        vr_im1 = _mm256_fmadd_pd(va_im1, vb_re1, vr_im1);
+        vr_im0 = _mm256_fmadd_pd(va_re0, vb_im0, vr_im0);
+        vr_im1 = _mm256_fmadd_pd(va_re1, vb_im1, vr_im1);
+        _mm256_store_pd(rre + i, vr_re0);
+        _mm256_store_pd(rre + i + 4, vr_re1);
+        _mm256_store_pd(rim + i, vr_im0);
+        _mm256_store_pd(rim + i + 4, vr_im1);
     }
 #else
     for (int i = 0; i < N / 2; i++) {

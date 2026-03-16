@@ -65,10 +65,22 @@ void BlindRotate(TRLWE<typename P::targetP> &res,
         ExternalProduct<typename P::targetP>(res, res, BKadded);
     }
 #else
-    for (int i = 0; i < P::domainP::k * P::domainP::n; i++) {
-        if (moded[i] == 0) continue;
-        // Do not use CMUXFFT to avoid unnecessary copy.
-        CMUXwithPolynomialMulByXaiMinusOne<P>(res, bkfft[i], moded[i]);
+    {
+        constexpr int total = P::domainP::k * P::domainP::n;
+        for (int i = 0; i < total; i++) {
+            if (moded[i] == 0) continue;
+            // Find next non-zero element for prefetching
+            const TRGSWFFT<typename P::targetP> *next_ptr = nullptr;
+            if constexpr (P::domainP::key_value_diff == 1) {
+                for (int j = i + 1; j < total; j++) {
+                    if (moded[j] != 0) {
+                        next_ptr = &bkfft[j][0];
+                        break;
+                    }
+                }
+            }
+            CMUXwithPolynomialMulByXaiMinusOne<P>(res, bkfft[i], moded[i], next_ptr);
+        }
     }
 #endif
 }
@@ -111,18 +123,35 @@ void BlindRotate(TRLWE<typename P::targetP> &res,
         ExternalProduct<typename P::targetP>(res, res, BKadded[i]);
     }
 #else
-    for (int i = 0; i < P::domainP::k * P::domainP::n; i++) {
-        constexpr typename P::domainP::T roundoffset =
-            1ULL << (std::numeric_limits<typename P::domainP::T>::digits - 2 -
-                     P::targetP::nbit + bitwidth);
-        const uint32_t ā =
-            (tlwe[i] + roundoffset) >>
-            (std::numeric_limits<typename P::domainP::T>::digits - 1 -
-             P::targetP::nbit + bitwidth)
-                << bitwidth;
-        if (ā == 0) continue;
-        // Do not use CMUXFFT to avoid unnecessary copy.
-        CMUXwithPolynomialMulByXaiMinusOne<P>(res, bkfft[i], ā);
+    {
+        constexpr int total = P::domainP::k * P::domainP::n;
+        for (int i = 0; i < total; i++) {
+            constexpr typename P::domainP::T roundoffset =
+                1ULL << (std::numeric_limits<typename P::domainP::T>::digits - 2 -
+                         P::targetP::nbit + bitwidth);
+            const uint32_t ā =
+                (tlwe[i] + roundoffset) >>
+                (std::numeric_limits<typename P::domainP::T>::digits - 1 -
+                 P::targetP::nbit + bitwidth)
+                    << bitwidth;
+            if (ā == 0) continue;
+            // Find next non-zero element for prefetching
+            const TRGSWFFT<typename P::targetP> *next_ptr = nullptr;
+            if constexpr (P::domainP::key_value_diff == 1) {
+                for (int j = i + 1; j < total; j++) {
+                    const uint32_t ā_next =
+                        (tlwe[j] + roundoffset) >>
+                        (std::numeric_limits<typename P::domainP::T>::digits - 1 -
+                         P::targetP::nbit + bitwidth)
+                            << bitwidth;
+                    if (ā_next != 0) {
+                        next_ptr = &bkfft[j][0];
+                        break;
+                    }
+                }
+            }
+            CMUXwithPolynomialMulByXaiMinusOne<P>(res, bkfft[i], ā, next_ptr);
+        }
     }
 #endif
 }

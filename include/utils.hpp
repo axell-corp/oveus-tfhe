@@ -13,6 +13,9 @@
 #include <functional>
 #include <limits>
 #include <random>
+#if defined(__AVX2__)
+#include <immintrin.h>
+#endif
 
 namespace TFHEpp {
 #if defined(USE_BLAKE3)
@@ -229,6 +232,120 @@ inline void PolynomialMulByXaiMinusOne(Polynomial<P> &res,
                                        const Polynomial<P> &poly,
                                        const typename P::T a)
 {
+#if defined(__AVX2__) && !defined(USE_AVX512)
+    if constexpr (std::is_same_v<typename P::T, uint32_t>) {
+        // Negacyclic rotation: res = X^a * poly - poly
+        // For a < N: rot[i<a] = -poly[i-a+N], rot[i>=a] = poly[i-a]
+        // For a >= N: rot[i<aa] = poly[i-aa+N], rot[i>=aa] = -poly[i-aa]  (aa=a-N)
+        const bool negate_first = (a < P::n);
+        const int split = negate_first ? static_cast<int>(a) : static_cast<int>(a - P::n);
+        const int src_offset_first = negate_first ? (P::n - split) : (P::n - split);
+        const __m256i vz = _mm256_setzero_si256();
+
+        // First segment [0, split): src = poly[i + N - split]
+        int i = 0;
+        if (negate_first) {
+            for (; i + 7 < split; i += 8) {
+                __m256i vs = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i *>(poly.data() + i + src_offset_first));
+                __m256i vp = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i *>(poly.data() + i));
+                _mm256_storeu_si256(reinterpret_cast<__m256i *>(res.data() + i),
+                    _mm256_sub_epi32(_mm256_sub_epi32(vz, vs), vp));
+            }
+        } else {
+            for (; i + 7 < split; i += 8) {
+                __m256i vs = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i *>(poly.data() + i + src_offset_first));
+                __m256i vp = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i *>(poly.data() + i));
+                _mm256_storeu_si256(reinterpret_cast<__m256i *>(res.data() + i),
+                    _mm256_sub_epi32(vs, vp));
+            }
+        }
+        for (; i < split; i++)
+            res[i] = negate_first ? (-poly[i + src_offset_first] - poly[i])
+                                  : (poly[i + src_offset_first] - poly[i]);
+
+        // Second segment [split, N): src = poly[i - split]
+        if (negate_first) {
+            for (; i + 7 < static_cast<int>(P::n); i += 8) {
+                __m256i vs = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i *>(poly.data() + i - split));
+                __m256i vp = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i *>(poly.data() + i));
+                _mm256_storeu_si256(reinterpret_cast<__m256i *>(res.data() + i),
+                    _mm256_sub_epi32(vs, vp));
+            }
+        } else {
+            for (; i + 7 < static_cast<int>(P::n); i += 8) {
+                __m256i vs = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i *>(poly.data() + i - split));
+                __m256i vp = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i *>(poly.data() + i));
+                _mm256_storeu_si256(reinterpret_cast<__m256i *>(res.data() + i),
+                    _mm256_sub_epi32(_mm256_sub_epi32(vz, vs), vp));
+            }
+        }
+        for (; i < static_cast<int>(P::n); i++)
+            res[i] = negate_first ? (poly[i - split] - poly[i])
+                                  : (-poly[i - split] - poly[i]);
+        return;
+    }
+    if constexpr (std::is_same_v<typename P::T, uint64_t>) {
+        const bool negate_first = (a < P::n);
+        const int split = negate_first ? static_cast<int>(a) : static_cast<int>(a - P::n);
+        const int src_offset_first = P::n - split;
+        const __m256i vz = _mm256_setzero_si256();
+
+        int i = 0;
+        if (negate_first) {
+            for (; i + 3 < split; i += 4) {
+                __m256i vs = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i *>(poly.data() + i + src_offset_first));
+                __m256i vp = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i *>(poly.data() + i));
+                _mm256_storeu_si256(reinterpret_cast<__m256i *>(res.data() + i),
+                    _mm256_sub_epi64(_mm256_sub_epi64(vz, vs), vp));
+            }
+        } else {
+            for (; i + 3 < split; i += 4) {
+                __m256i vs = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i *>(poly.data() + i + src_offset_first));
+                __m256i vp = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i *>(poly.data() + i));
+                _mm256_storeu_si256(reinterpret_cast<__m256i *>(res.data() + i),
+                    _mm256_sub_epi64(vs, vp));
+            }
+        }
+        for (; i < split; i++)
+            res[i] = negate_first ? (-poly[i + src_offset_first] - poly[i])
+                                  : (poly[i + src_offset_first] - poly[i]);
+        if (negate_first) {
+            for (; i + 3 < static_cast<int>(P::n); i += 4) {
+                __m256i vs = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i *>(poly.data() + i - split));
+                __m256i vp = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i *>(poly.data() + i));
+                _mm256_storeu_si256(reinterpret_cast<__m256i *>(res.data() + i),
+                    _mm256_sub_epi64(vs, vp));
+            }
+        } else {
+            for (; i + 3 < static_cast<int>(P::n); i += 4) {
+                __m256i vs = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i *>(poly.data() + i - split));
+                __m256i vp = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i *>(poly.data() + i));
+                _mm256_storeu_si256(reinterpret_cast<__m256i *>(res.data() + i),
+                    _mm256_sub_epi64(_mm256_sub_epi64(vz, vs), vp));
+            }
+        }
+        for (; i < static_cast<int>(P::n); i++)
+            res[i] = negate_first ? (poly[i - split] - poly[i])
+                                  : (-poly[i - split] - poly[i]);
+        return;
+    }
+#endif
     if (a < P::n) {
         for (int i = 0; i < a; i++) res[i] = -poly[i - a + P::n] - poly[i];
         for (int i = a; i < P::n; i++) res[i] = poly[i - a] - poly[i];
