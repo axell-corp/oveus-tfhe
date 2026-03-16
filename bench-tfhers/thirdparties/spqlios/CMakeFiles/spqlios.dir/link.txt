@@ -1,0 +1,2 @@
+"/usr/bin/gcc-ar-13" cr libspqlios.a "CMakeFiles/spqlios.dir/spqlios-fft-fma.s.o" "CMakeFiles/spqlios.dir/spqlios-ifft-fma.s.o" CMakeFiles/spqlios.dir/fft_processor_spqlios.cpp.o "CMakeFiles/spqlios.dir/spqlios-fft-impl.cpp.o"
+"/usr/bin/gcc-ranlib-13" libspqlios.a

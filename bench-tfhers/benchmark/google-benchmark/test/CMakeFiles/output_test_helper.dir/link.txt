@@ -1,0 +1,2 @@
+"/usr/bin/gcc-ar-13" cr liboutput_test_helper.a CMakeFiles/output_test_helper.dir/output_test_helper.cc.o
+"/usr/bin/gcc-ranlib-13" liboutput_test_helper.a

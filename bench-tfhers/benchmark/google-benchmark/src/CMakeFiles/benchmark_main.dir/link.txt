@@ -1,0 +1,2 @@
+"/usr/bin/gcc-ar-13" cr libbenchmark_main.a CMakeFiles/benchmark_main.dir/benchmark_main.cc.o
+"/usr/bin/gcc-ranlib-13" libbenchmark_main.a

@@ -10,8 +10,7 @@ TFHEPP_EXPLICIT_INSTANTIATION_TRLWE(INST)
 #define INST(bkP)                                             \
     template void CMUXwithPolynomialMulByXaiMinusOne<bkP>( \
         TRLWE<typename bkP::targetP> & acc,                   \
-        const BootstrappingKeyElementFFT<bkP> &cs, const int a, \
-        const TRGSWFFT<typename bkP::targetP> *next_trgswfft)
+        const BootstrappingKeyElementFFT<bkP> &cs, const int a)
 TFHEPP_EXPLICIT_INSTANTIATION_BLIND_ROTATE(INST)
 #undef INST
 
