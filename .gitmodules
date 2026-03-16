@@ -15,7 +15,7 @@
 	url = https://github.com/BLAKE3-team/BLAKE3.git
 [submodule "thirdparties/cereal"]
 	path = thirdparties/cereal
-	url = https://github.com/virtualsecureplatform/cereal.git
+	url = https://github.com/USCiLab/cereal
 [submodule "thirdparties/spqlios-arithmetic"]
 	path = thirdparties/spqlios-arithmetic
 	url = https://github.com/tfhe/spqlios-arithmetic.git
