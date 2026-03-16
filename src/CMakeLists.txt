@@ -58,6 +58,10 @@ elseif(USE_SPQLIOS_ARITHMETIC)
   target_link_libraries(tfhe++ INTERFACE libspqlios)
   target_include_directories(
     tfhe++ PUBLIC ${PROJECT_SOURCE_DIR}/thirdparties/spqlios-arithmetic)
+elseif(USE_SPQLIOS_INTL)
+  target_link_libraries(tfhe++ INTERFACE spqlios-intl)
+  target_include_directories(
+    tfhe++ PUBLIC ${PROJECT_SOURCE_DIR}/thirdparties/spqlios-intl)
 else()
   if(USE_MKL)
     target_link_libraries(tfhe++ INTERFACE mklproc)

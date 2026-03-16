@@ -17,6 +17,8 @@
 #include <fft_processor_concrete.hpp>
 #elif USE_SPQLIOS_ARITHMETIC
 #include <fft_processor_spqlios_arithmetic.h>
+#elif USE_SPQLIOS_INTL
+#include <fft_processor_spqlios_intl.h>
 #else
 #include <fft_processor_spqlios.h>
 #endif
@@ -217,7 +219,18 @@ inline void TwistIFFTUInt(PolynomialInFD<P> &res, const Polynomial<P> &a)
 template <uint32_t N>
 inline void MulInFD(std::array<double, N> &res, const std::array<double, N> &b)
 {
-#ifdef USE_INTERLEAVED_FORMAT
+#if defined(USE_INTERLEAVED_FORMAT) && defined(__AVX2__)
+    // AVX2 interleaved complex multiply: 2 complex per YMM
+    for (uint32_t i = 0; i < N; i += 4) {
+        __m256d a = _mm256_load_pd(res.data() + i);
+        __m256d w = _mm256_load_pd(b.data() + i);
+        __m256d w_swap = _mm256_permute_pd(w, 0b0101);
+        __m256d a_re = _mm256_unpacklo_pd(a, a);
+        __m256d a_im = _mm256_unpackhi_pd(a, a);
+        _mm256_store_pd(res.data() + i,
+            _mm256_fmaddsub_pd(a_re, w, _mm256_mul_pd(a_im, w_swap)));
+    }
+#elif defined(USE_INTERLEAVED_FORMAT)
     for (int i = 0; i < N / 2; i++) {
         const std::complex tmp = std::complex(res[2 * i], res[2 * i + 1]) *
                                  std::complex(b[2 * i], b[2 * i + 1]);
@@ -279,7 +292,17 @@ template <uint32_t N>
 inline void MulInFD(std::array<double, N> &res, const std::array<double, N> &a,
                     const std::array<double, N> &b)
 {
-#ifdef USE_INTERLEAVED_FORMAT
+#if defined(USE_INTERLEAVED_FORMAT) && defined(__AVX2__)
+    for (uint32_t i = 0; i < N; i += 4) {
+        __m256d va = _mm256_load_pd(a.data() + i);
+        __m256d w = _mm256_load_pd(b.data() + i);
+        __m256d w_swap = _mm256_permute_pd(w, 0b0101);
+        __m256d a_re = _mm256_unpacklo_pd(va, va);
+        __m256d a_im = _mm256_unpackhi_pd(va, va);
+        _mm256_store_pd(res.data() + i,
+            _mm256_fmaddsub_pd(a_re, w, _mm256_mul_pd(a_im, w_swap)));
+    }
+#elif defined(USE_INTERLEAVED_FORMAT)
     for (int i = 0; i < N / 2; i++) {
         const std::complex tmp = std::complex(a[2 * i], a[2 * i + 1]) *
                                  std::complex(b[2 * i], b[2 * i + 1]);
@@ -347,7 +370,19 @@ template <uint32_t N>
 inline void FMAInFD(std::array<double, N> &res, const std::array<double, N> &a,
                     const std::array<double, N> &b)
 {
-#ifdef USE_INTERLEAVED_FORMAT
+#if defined(USE_INTERLEAVED_FORMAT) && defined(__AVX2__)
+    // AVX2 interleaved complex FMA: res += a * b
+    for (uint32_t i = 0; i < N; i += 4) {
+        __m256d va = _mm256_load_pd(a.data() + i);
+        __m256d w = _mm256_load_pd(b.data() + i);
+        __m256d r = _mm256_load_pd(res.data() + i);
+        __m256d w_swap = _mm256_permute_pd(w, 0b0101);
+        __m256d a_re = _mm256_unpacklo_pd(va, va);
+        __m256d a_im = _mm256_unpackhi_pd(va, va);
+        __m256d prod = _mm256_fmaddsub_pd(a_re, w, _mm256_mul_pd(a_im, w_swap));
+        _mm256_store_pd(res.data() + i, _mm256_add_pd(r, prod));
+    }
+#elif defined(USE_INTERLEAVED_FORMAT)
     for (int i = 0; i < N / 2; i++) {
         std::complex tmp = std::complex(a[2 * i], a[2 * i + 1]) *
                            std::complex(b[2 * i], b[2 * i + 1]);

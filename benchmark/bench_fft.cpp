@@ -9,6 +9,11 @@
 #include <immintrin.h>
 #include "google-benchmark/include/benchmark/benchmark.h"
 
+// Alias for the active FFT processor type
+#ifdef USE_SPQLIOS_INTL
+using FFT_Processor_Spqlios = FFT_Processor_Spqlios_Intl;
+#endif
+
 // Forward-declare the SPQLIOS conversion functions from x86.h
 namespace SPQLIOS {
 inline __m256i mm256_cvtpd_epi64(const __m256d x) {
