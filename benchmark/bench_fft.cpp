@@ -6,7 +6,24 @@
 #include <random>
 
 #include "../include/tfhe++.hpp"
+#include <immintrin.h>
 #include "google-benchmark/include/benchmark/benchmark.h"
+
+// Forward-declare the SPQLIOS conversion functions from x86.h
+namespace SPQLIOS {
+inline __m256i mm256_cvtpd_epi64(const __m256d x) {
+    const __m256d magic_d = _mm256_set1_pd(6755399441055744.0);
+    const __m256i magic_i = _mm256_set1_epi64x(0x4338000000000000LL);
+    const __m256d adjusted = _mm256_add_pd(x, magic_d);
+    return _mm256_sub_epi64(_mm256_castpd_si256(adjusted), magic_i);
+}
+inline __m256d mm256_cvtepi64_pd(const __m256i x) {
+    const __m256i magic_i = _mm256_set1_epi64x(0x4338000000000000LL);
+    const __m256d magic_d = _mm256_set1_pd(6755399441055744.0);
+    return _mm256_sub_pd(
+        _mm256_castsi256_pd(_mm256_add_epi64(x, magic_i)), magic_d);
+}
+} // namespace SPQLIOS
 
 // Pin the process to CPU core 0 (3D V-Cache CCD on Ryzen 9950X3D)
 static void pin_to_core(int core_id)
@@ -206,6 +223,85 @@ static void BM_RawIFFTMulFFT(benchmark::State& state)
     }
 }
 
+// ============================================================
+// Benchmark: isolated i64→f64 conversion (mm256_cvtepi64_pd)
+// ============================================================
+template <int N>
+static void BM_ConvI64toF64(benchmark::State& state)
+{
+    alignas(64) std::array<int64_t, N> input;
+    alignas(64) std::array<double, N> output;
+    std::mt19937_64 rng(42);
+    for (auto& v : input) v = static_cast<int64_t>(rng()) >> 16;  // fits in 2^48
+    for (auto _ : state) {
+        for (int i = 0; i < N; i += 4) {
+            __m256i vi = _mm256_load_si256((const __m256i*)(input.data() + i));
+            __m256d vd = SPQLIOS::mm256_cvtepi64_pd(vi);
+            _mm256_store_pd(output.data() + i, vd);
+        }
+        benchmark::DoNotOptimize(output.data());
+    }
+}
+
+// ============================================================
+// Benchmark: isolated f64→i64 conversion (mm256_cvtpd_epi64)
+// ============================================================
+template <int N>
+static void BM_ConvF64toI64(benchmark::State& state)
+{
+    alignas(64) std::array<double, N> input;
+    alignas(64) std::array<int64_t, N> output;
+    std::mt19937 rng(42);
+    std::uniform_real_distribution<double> dist(-1e15, 1e15);
+    for (auto& v : input) v = dist(rng);
+    for (auto _ : state) {
+        for (int i = 0; i < N; i += 4) {
+            __m256d vd = _mm256_load_pd(input.data() + i);
+            __m256i vi = SPQLIOS::mm256_cvtpd_epi64(vd);
+            _mm256_store_si256((__m256i*)(output.data() + i), vi);
+        }
+        benchmark::DoNotOptimize(output.data());
+    }
+}
+
+// ============================================================
+// Benchmark: torus64 IFFT (i64→f64 conversion + raw ifft)
+// ============================================================
+template <int N>
+static void BM_RawIFFT64(benchmark::State& state)
+{
+    static thread_local FFT_Processor_Spqlios proc(N);
+    alignas(64) std::array<uint64_t, N> input;
+    alignas(64) std::array<double, N> output;
+    std::mt19937_64 rng(42);
+    for (auto& v : input) v = rng();
+    for (auto _ : state) {
+        proc.execute_reverse_torus64(output.data(), input.data());
+        benchmark::DoNotOptimize(output.data());
+    }
+}
+
+// ============================================================
+// Benchmark: torus64 FFT (scale + raw fft + f64→i64 conversion)
+// ============================================================
+template <int N>
+static void BM_RawFFT64(benchmark::State& state)
+{
+    static thread_local FFT_Processor_Spqlios proc(N);
+    alignas(64) std::array<double, N> input;
+    alignas(64) std::array<uint64_t, N> output;
+    std::mt19937 rng(42);
+    std::uniform_real_distribution<double> dist(-1e15, 1e15);
+    for (auto& v : input) v = dist(rng);
+    for (auto _ : state) {
+        // Need mutable copy since execute_direct_torus64 modifies input in-place
+        alignas(64) std::array<double, N> tmp;
+        memcpy(tmp.data(), input.data(), sizeof(tmp));
+        proc.execute_direct_torus64(output.data(), tmp.data());
+        benchmark::DoNotOptimize(output.data());
+    }
+}
+
 BENCHMARK(BM_IFFT_lvl1)
     ->Iterations(10000)
     ->Repetitions(5)
@@ -240,4 +336,14 @@ BENCHMARK(BM_RawIFFTMulFFT<512>)->Iterations(10000)->Repetitions(5)->DisplayAggr
 BENCHMARK(BM_RawIFFT<1024>)->Iterations(10000)->Repetitions(5)->DisplayAggregatesOnly(true);
 BENCHMARK(BM_RawFFT<1024>)->Iterations(10000)->Repetitions(5)->DisplayAggregatesOnly(true);
 BENCHMARK(BM_RawIFFTMulFFT<1024>)->Iterations(10000)->Repetitions(5)->DisplayAggregatesOnly(true);
+// Isolated conversion benchmarks
+BENCHMARK(BM_ConvI64toF64<512>)->Iterations(10000)->Repetitions(5)->DisplayAggregatesOnly(true);
+BENCHMARK(BM_ConvF64toI64<512>)->Iterations(10000)->Repetitions(5)->DisplayAggregatesOnly(true);
+BENCHMARK(BM_ConvI64toF64<1024>)->Iterations(10000)->Repetitions(5)->DisplayAggregatesOnly(true);
+BENCHMARK(BM_ConvF64toI64<1024>)->Iterations(10000)->Repetitions(5)->DisplayAggregatesOnly(true);
+// Torus64 FFT benchmarks (to compare overhead vs torus32)
+BENCHMARK(BM_RawIFFT64<512>)->Iterations(10000)->Repetitions(5)->DisplayAggregatesOnly(true);
+BENCHMARK(BM_RawFFT64<512>)->Iterations(10000)->Repetitions(5)->DisplayAggregatesOnly(true);
+BENCHMARK(BM_RawIFFT64<1024>)->Iterations(10000)->Repetitions(5)->DisplayAggregatesOnly(true);
+BENCHMARK(BM_RawFFT64<1024>)->Iterations(10000)->Repetitions(5)->DisplayAggregatesOnly(true);
 BENCHMARK_MAIN();
