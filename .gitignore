@@ -4,4 +4,9 @@ build-*
 .claude
 *.sif
 tfhe-rs
-bench-tfhers-fft/target
+bench-tfhers-fft/targetbench-tfhers/CMake*
+bench-tfhers/Makefile
+bench-tfhers/target/
+bench-tfhers/Cargo.lock
+tfhe-rs/
+build/
