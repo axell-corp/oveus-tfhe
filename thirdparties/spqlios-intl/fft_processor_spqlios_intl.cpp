@@ -81,7 +81,7 @@ static inline void butterfly_size1_dif(__m256d &v) {
 }
 
 // ── DIT FFT with fused passes ────────────────────────────────────────────────
-static void intl_fft(const INTL_FFT_PRECOMP *tables, double *c) {
+static void __attribute__((noinline)) intl_fft(const INTL_FFT_PRECOMP *tables, double *c) {
     const int32_t n = tables->n;
     const int32_t ns2 = n / 4;        // number of complex points
     const double *trig = tables->trig_tables;
