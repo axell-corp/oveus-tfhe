@@ -1,2 +1,0 @@
-/usr/bin/ar qc libAES.a CMakeFiles/AES.dir/src/AES.cpp.o
-/usr/bin/ranlib libAES.a

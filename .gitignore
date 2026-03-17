@@ -1,12 +1,8 @@
 build
 build-*
+bench-tfhers/
+bench-tfhers-fft/
 .vscode
 .claude
 *.sif
-tfhe-rs
-bench-tfhers-fft/targetbench-tfhers/CMake*
-bench-tfhers/Makefile
-bench-tfhers/target/
-bench-tfhers/Cargo.lock
 tfhe-rs/
-build/
