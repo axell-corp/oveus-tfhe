@@ -76,223 +76,32 @@ struct STOCKHAM_PRECOMP {
 
 static void stockham_r4_split(
     int32_t ns2, bool fwd,
-    const double *trig,       // butterfly twiddles
-    double *re, double *im,   // data (input/output)
-    double *sre, double *sim) // scratch
+    const double *trig,
+    double *re, double *im,
+    double *sre, double *sim)
 {
     double *src_re = re, *src_im = im;
     double *dst_re = sre, *dst_im = sim;
     const double *tw = trig;
     int32_t q = ns2 / 4;
     int32_t s = 1;
+    const __m256d neg = _mm256_set1_pd(-0.0);
 
     while (q >= 4) {
-        int32_t stride = q * s;  // = ns2/4
+        const int32_t stride = q * s;  // = ns2/4
 
-        for (int32_t j = 0; j < s; j += 4) {
-            __m256d w1_re, w1_im, w2_re, w2_im, w3_re, w3_im;
-            if (s >= 4) {
-                // Load twiddles: stored as [cos0..3, sin0..3] for w1, w2, w3
-                w1_re = _mm256_load_pd(tw);      w1_im = _mm256_load_pd(tw + 4);  tw += 8;
-                w2_re = _mm256_load_pd(tw);      w2_im = _mm256_load_pd(tw + 4);  tw += 8;
-                w3_re = _mm256_load_pd(tw);      w3_im = _mm256_load_pd(tw + 4);  tw += 8;
-            }
-
-            for (int32_t p = 0; p < q; p++) {
-                int32_t idx = j + s * p;
-                // Load from 4 quarters
-                __m256d a_re = _mm256_loadu_pd(src_re + idx);
-                __m256d a_im = _mm256_loadu_pd(src_im + idx);
-                __m256d b_re = _mm256_loadu_pd(src_re + idx + stride);
-                __m256d b_im = _mm256_loadu_pd(src_im + idx + stride);
-                __m256d c_re = _mm256_loadu_pd(src_re + idx + 2*stride);
-                __m256d c_im = _mm256_loadu_pd(src_im + idx + 2*stride);
-                __m256d d_re = _mm256_loadu_pd(src_re + idx + 3*stride);
-                __m256d d_im = _mm256_loadu_pd(src_im + idx + 3*stride);
-
-                // Radix-4 butterfly
-                __m256d apc_re = _mm256_add_pd(a_re, c_re);
-                __m256d apc_im = _mm256_add_pd(a_im, c_im);
-                __m256d amc_re = _mm256_sub_pd(a_re, c_re);
-                __m256d amc_im = _mm256_sub_pd(a_im, c_im);
-                __m256d bpd_re = _mm256_add_pd(b_re, d_re);
-                __m256d bpd_im = _mm256_add_pd(b_im, d_im);
-                __m256d bmd_re = _mm256_sub_pd(b_re, d_re);
-                __m256d bmd_im = _mm256_sub_pd(b_im, d_im);
-
-                // j*(b-d): for forward, j_re = -bmd_im, j_im = bmd_re
-                //          for inverse, j_re = bmd_im,  j_im = -bmd_re
-                __m256d jbmd_re, jbmd_im;
-                if (fwd) {
-                    jbmd_re = _mm256_xor_pd(bmd_im, _mm256_set1_pd(-0.0));  // -bmd_im
-                    jbmd_im = bmd_re;
-                } else {
-                    jbmd_re = bmd_im;
-                    jbmd_im = _mm256_xor_pd(bmd_re, _mm256_set1_pd(-0.0));  // -bmd_re
-                }
-
-                // out0 = apc + bpd (no twiddle)
-                int32_t o = p + q * (4 * j / 4);  // simplified: p + q*j since j steps by 4
-                // Wait: output index should be p + q * (4*j_original) but j steps by 4 here
-                // Let me reconsider. When j steps by 4 (processing 4 elements per YMM),
-                // the output positions are at p + q*(j), p + q*(j) + q, etc.
-                // Actually the Stockham output index is: o_r = p + q*(4*(j/4) + r)
-                // Since j is the actual element index (stepping by 4), j/4 is the group.
-                // But output for 4 consecutive j values should go to 4 consecutive positions.
-                // Actually for split format with YMM of 4 doubles:
-                // j goes 0,4,8,... and each YMM covers j, j+1, j+2, j+3
-                // Output: for each element at position j+k (k=0..3):
-                //   o_r(j+k) = p + q * (4*(j+k) + r)  -- but this scatters outputs!
-                // The Stockham output reindexing depends on stride s.
-                // For s=1: the output groups elements by butterfly output index
-                // For s>1: same grouping at larger granularity
-                //
-                // For split format, the key insight: we process 4 consecutive j values
-                // in one YMM. The output for these 4 j values at radix index r goes to:
-                //   dst[p + q*(4*j + r)]  through  dst[p + q*(4*(j+3) + r)]
-                //   = dst[p + 4qj + qr]  through  dst[p + 4q(j+3) + qr]
-                //   = consecutive positions starting at p + 4qj + qr, stride 4q
-                // These are NOT consecutive in memory (stride 4q between elements).
-                // So we can't use a single YMM store. We'd need to scatter.
-                //
-                // PROBLEM: The Stockham auto-sort output pattern scatters elements
-                // when the YMM processes multiple j values. With interleaved format
-                // this was handled by catlo/cathi. With split format, there's no
-                // efficient way to do this scatter with YMM.
-                //
-                // SOLUTION: Process 1 j value at a time (scalar within YMM),
-                // using the p loop for YMM parallelism instead.
-                // This means: for each j, process p=0..q-1 in steps of 4.
-                // Each iteration: load 4 consecutive p values from each quarter.
-                // This gives contiguous loads AND contiguous stores!
-
-                // Actually wait, I've been overcomplicating this. Let me re-derive.
-                // For the inner p loop: each p produces outputs at:
-                //   o_r = p + q * (4*j + r)
-                // For fixed j, as p goes 0..q-1: outputs at 0..q-1, q..2q-1, 2q..3q-1, 3q..4q-1
-                // (for r=0,1,2,3 respectively, offset by q*4j)
-                // These ARE consecutive for each r! So we can store 4 consecutive p values.
-                // But we need s >= 4 for the j loop, and s is the stride.
-                // For s=1: j=0 only. p goes 0..q-1 in steps of 4.
-                //   Loads: idx = 0 + 1*p = p → 4 consecutive elements from each quarter ✓
-                //   Stores: o = p + q*0 = p, then p+q, p+2q, p+3q → 4 consecutive ✓
-                // Great! So the p loop should be the inner loop with YMM, not j.
-                // Let me restructure.
-                break; // exit the wrong loop structure
-            }
-            break;
-        }
-        break; // restructure needed
-    }
-
-    // RESTRUCTURED: j is the OUTER loop (scalar), p is the INNER loop (YMM of 4)
-    // Reset
-    src_re = re; src_im = im;
-    dst_re = sre; dst_im = sim;
-    tw = trig;
-    q = ns2 / 4;
-    s = 1;
-
-    while (q >= 4) {
-        int32_t stride = q * s;
-
-        for (int32_t j = 0; j < s; j++) {
-            // Load twiddles for this j (broadcast to all 4 lanes)
-            __m256d w1_re, w1_im, w2_re, w2_im, w3_re, w3_im;
-            if (s >= 1 && j > 0) {
-                // Non-trivial twiddle
-                w1_re = _mm256_set1_pd(tw[j * 6 + 0]);
-                w1_im = _mm256_set1_pd(tw[j * 6 + 1]);
-                w2_re = _mm256_set1_pd(tw[j * 6 + 2]);
-                w2_im = _mm256_set1_pd(tw[j * 6 + 3]);
-                w3_re = _mm256_set1_pd(tw[j * 6 + 4]);
-                w3_im = _mm256_set1_pd(tw[j * 6 + 5]);
-            }
-
-            for (int32_t p = 0; p < q; p += 4) {
-                int32_t idx = j + s * p;
-                __m256d a_re = _mm256_loadu_pd(src_re + idx);
-                __m256d a_im = _mm256_loadu_pd(src_im + idx);
-                __m256d b_re = _mm256_loadu_pd(src_re + idx + stride);
-                __m256d b_im = _mm256_loadu_pd(src_im + idx + stride);
-                __m256d c_re = _mm256_loadu_pd(src_re + idx + 2*stride);
-                __m256d c_im = _mm256_loadu_pd(src_im + idx + 2*stride);
-                __m256d d_re = _mm256_loadu_pd(src_re + idx + 3*stride);
-                __m256d d_im = _mm256_loadu_pd(src_im + idx + 3*stride);
-
-                __m256d apc_re = _mm256_add_pd(a_re, c_re);
-                __m256d apc_im = _mm256_add_pd(a_im, c_im);
-                __m256d amc_re = _mm256_sub_pd(a_re, c_re);
-                __m256d amc_im = _mm256_sub_pd(a_im, c_im);
-                __m256d bpd_re = _mm256_add_pd(b_re, d_re);
-                __m256d bpd_im = _mm256_add_pd(b_im, d_im);
-                __m256d bmd_re = _mm256_sub_pd(b_re, d_re);
-                __m256d bmd_im = _mm256_sub_pd(b_im, d_im);
-
-                __m256d neg = _mm256_set1_pd(-0.0);
-                __m256d jbmd_re, jbmd_im;
-                if (fwd) { jbmd_re = _mm256_xor_pd(bmd_im, neg); jbmd_im = bmd_re; }
-                else     { jbmd_re = bmd_im; jbmd_im = _mm256_xor_pd(bmd_re, neg); }
-
-                // out0 = apc + bpd
-                __m256d o0_re = _mm256_add_pd(apc_re, bpd_re);
-                __m256d o0_im = _mm256_add_pd(apc_im, bpd_im);
-
-                // out1 = (amc - jbmd) * w1
-                __m256d t1_re = _mm256_sub_pd(amc_re, jbmd_re);
-                __m256d t1_im = _mm256_sub_pd(amc_im, jbmd_im);
-                // out2 = (apc - bpd) * w2
-                __m256d t2_re = _mm256_sub_pd(apc_re, bpd_re);
-                __m256d t2_im = _mm256_sub_pd(apc_im, bpd_im);
-                // out3 = (amc + jbmd) * w3
-                __m256d t3_re = _mm256_add_pd(amc_re, jbmd_re);
-                __m256d t3_im = _mm256_add_pd(amc_im, jbmd_im);
-
-                __m256d o1_re, o1_im, o2_re, o2_im, o3_re, o3_im;
-                if (j == 0) {
-                    // w1=w2=w3=1 for j=0
-                    o1_re = t1_re; o1_im = t1_im;
-                    o2_re = t2_re; o2_im = t2_im;
-                    o3_re = t3_re; o3_im = t3_im;
-                } else {
-                    cmul_split(t1_re, t1_im, w1_re, w1_im, o1_re, o1_im);
-                    cmul_split(t2_re, t2_im, w2_re, w2_im, o2_re, o2_im);
-                    cmul_split(t3_re, t3_im, w3_re, w3_im, o3_re, o3_im);
-                }
-
-                // Output: p + q*(4j+r), consecutive in p for each (j,r)
-                int32_t base = q * 4 * j;
-                _mm256_storeu_pd(dst_re + base + p, o0_re);
-                _mm256_storeu_pd(dst_im + base + p, o0_im);
-                _mm256_storeu_pd(dst_re + base + q + p, o1_re);
-                _mm256_storeu_pd(dst_im + base + q + p, o1_im);
-                _mm256_storeu_pd(dst_re + base + 2*q + p, o2_re);
-                _mm256_storeu_pd(dst_im + base + 2*q + p, o2_im);
-                _mm256_storeu_pd(dst_re + base + 3*q + p, o3_re);
-                _mm256_storeu_pd(dst_im + base + 3*q + p, o3_im);
-            }
-        }
-
-        tw += s * 6;  // skip twiddles for this pass (s entries × 6 doubles each)
-        double *t;
-        t = src_re; src_re = dst_re; dst_re = t;
-        t = src_im; src_im = dst_im; dst_im = t;
-        s *= 4; q /= 4;
-    }
-
-    // Final pass
-    if (q == 1) {
-        // Final radix-4 (no twiddle needed since it's the innermost)
-        int32_t stride = s;
-        for (int32_t j = 0; j < s; j += 4) {
-            __m256d a_re = _mm256_loadu_pd(src_re + j);
-            __m256d a_im = _mm256_loadu_pd(src_im + j);
-            __m256d b_re = _mm256_loadu_pd(src_re + j + stride);
-            __m256d b_im = _mm256_loadu_pd(src_im + j + stride);
-            __m256d c_re = _mm256_loadu_pd(src_re + j + 2*stride);
-            __m256d c_im = _mm256_loadu_pd(src_im + j + 2*stride);
-            __m256d d_re = _mm256_loadu_pd(src_re + j + 3*stride);
-            __m256d d_im = _mm256_loadu_pd(src_im + j + 3*stride);
+        // j=0 pass: no twiddle (w1=w2=w3=1)
+        for (int32_t p = 0; p < q; p += 4) {
+            const int32_t idx = s * p;  // j=0, so idx = s*p
+            const double *sr = src_re + idx, *si = src_im + idx;
+            __m256d a_re = _mm256_loadu_pd(sr);
+            __m256d a_im = _mm256_loadu_pd(si);
+            __m256d b_re = _mm256_loadu_pd(sr + stride);
+            __m256d b_im = _mm256_loadu_pd(si + stride);
+            __m256d c_re = _mm256_loadu_pd(sr + 2*stride);
+            __m256d c_im = _mm256_loadu_pd(si + 2*stride);
+            __m256d d_re = _mm256_loadu_pd(sr + 3*stride);
+            __m256d d_im = _mm256_loadu_pd(si + 3*stride);
 
             __m256d apc_re = _mm256_add_pd(a_re, c_re);
             __m256d apc_im = _mm256_add_pd(a_im, c_im);
@@ -302,59 +111,144 @@ static void stockham_r4_split(
             __m256d bpd_im = _mm256_add_pd(b_im, d_im);
             __m256d bmd_re = _mm256_sub_pd(b_re, d_re);
             __m256d bmd_im = _mm256_sub_pd(b_im, d_im);
-            __m256d neg = _mm256_set1_pd(-0.0);
+
             __m256d jbmd_re, jbmd_im;
             if (fwd) { jbmd_re = _mm256_xor_pd(bmd_im, neg); jbmd_im = bmd_re; }
             else     { jbmd_re = bmd_im; jbmd_im = _mm256_xor_pd(bmd_re, neg); }
 
-            // Store in auto-sort order: 4j+r for r=0,1,2,3
-            // For j stepping by 4: positions 4j..4j+3, 4(j+1)..4(j+1)+3, etc.
-            // = 16 consecutive values for re and im
-            // But we can't easily interleave 4 outputs into consecutive groups of 4.
-            // For the final stage, just store at the output positions directly.
-            // With m=1, o_r = 0 + 1*(4j+r) = 4j+r
-            // For j,j+1,j+2,j+3 → outputs at 4j..4j+15
-            // We need to transpose the 4 output YMMs (each holds outputs for 4 j values
-            // at the same r) into 4 YMMs where each holds all 4 r values for 1 j.
-            // This requires a 4x4 transpose. For now, just store scattered.
-            // Actually for the FINAL stage in split format, the outputs go directly
-            // into the result array. Since p=0 for all (m=1), we just write to
-            // position 4j+r in the output. With j stepping by 4 and r=0..3,
-            // each group of 4j values produces 16 output positions.
-            // Since the data is in split re/im arrays, we can store:
-            // For j stepping by 4: we have 4 elements per YMM at each r.
-            // But output positions 4j+r are interleaved across different j.
-            // This IS a scatter operation.
-            // Simplest correct approach: scalar stores for the final stage.
-            double out_re[4], out_im[4];
-            double t_re[16], t_im[16];
-            // Store butterfly outputs to temp
-            _mm256_storeu_pd(t_re + 0, _mm256_add_pd(apc_re, bpd_re));
-            _mm256_storeu_pd(t_im + 0, _mm256_add_pd(apc_im, bpd_im));
-            _mm256_storeu_pd(t_re + 4, _mm256_sub_pd(amc_re, jbmd_re));
-            _mm256_storeu_pd(t_im + 4, _mm256_sub_pd(amc_im, jbmd_im));
-            _mm256_storeu_pd(t_re + 8, _mm256_sub_pd(apc_re, bpd_re));
-            _mm256_storeu_pd(t_im + 8, _mm256_sub_pd(apc_im, bpd_im));
-            _mm256_storeu_pd(t_re + 12, _mm256_add_pd(amc_re, jbmd_re));
-            _mm256_storeu_pd(t_im + 12, _mm256_add_pd(amc_im, jbmd_im));
-            // Scatter to auto-sort positions
-            for (int k = 0; k < 4; k++) {
-                for (int r = 0; r < 4; r++) {
-                    dst_re[4*(j+k) + r] = t_re[r*4 + k];
-                    dst_im[4*(j+k) + r] = t_im[r*4 + k];
-                }
+            _mm256_storeu_pd(dst_re + p, _mm256_add_pd(apc_re, bpd_re));
+            _mm256_storeu_pd(dst_im + p, _mm256_add_pd(apc_im, bpd_im));
+            _mm256_storeu_pd(dst_re + q + p, _mm256_sub_pd(amc_re, jbmd_re));
+            _mm256_storeu_pd(dst_im + q + p, _mm256_sub_pd(amc_im, jbmd_im));
+            _mm256_storeu_pd(dst_re + 2*q + p, _mm256_sub_pd(apc_re, bpd_re));
+            _mm256_storeu_pd(dst_im + 2*q + p, _mm256_sub_pd(apc_im, bpd_im));
+            _mm256_storeu_pd(dst_re + 3*q + p, _mm256_add_pd(amc_re, jbmd_re));
+            _mm256_storeu_pd(dst_im + 3*q + p, _mm256_add_pd(amc_im, jbmd_im));
+        }
+
+        // j=1..s-1 passes: with twiddle multiply
+        for (int32_t j = 1; j < s; j++) {
+            const double *twj = tw + j * 6;
+            __m256d w1_re = _mm256_set1_pd(twj[0]), w1_im = _mm256_set1_pd(twj[1]);
+            __m256d w2_re = _mm256_set1_pd(twj[2]), w2_im = _mm256_set1_pd(twj[3]);
+            __m256d w3_re = _mm256_set1_pd(twj[4]), w3_im = _mm256_set1_pd(twj[5]);
+            const int32_t base = q * 4 * j;
+
+            for (int32_t p = 0; p < q; p += 4) {
+                const int32_t idx = j + s * p;
+                const double *sr = src_re + idx, *si = src_im + idx;
+                __m256d a_re = _mm256_loadu_pd(sr);
+                __m256d a_im = _mm256_loadu_pd(si);
+                __m256d b_re = _mm256_loadu_pd(sr + stride);
+                __m256d b_im = _mm256_loadu_pd(si + stride);
+                __m256d c_re = _mm256_loadu_pd(sr + 2*stride);
+                __m256d c_im = _mm256_loadu_pd(si + 2*stride);
+                __m256d d_re = _mm256_loadu_pd(sr + 3*stride);
+                __m256d d_im = _mm256_loadu_pd(si + 3*stride);
+
+                __m256d apc_re = _mm256_add_pd(a_re, c_re);
+                __m256d apc_im = _mm256_add_pd(a_im, c_im);
+                __m256d amc_re = _mm256_sub_pd(a_re, c_re);
+                __m256d amc_im = _mm256_sub_pd(a_im, c_im);
+                __m256d bpd_re = _mm256_add_pd(b_re, d_re);
+                __m256d bpd_im = _mm256_add_pd(b_im, d_im);
+                __m256d bmd_re = _mm256_sub_pd(b_re, d_re);
+                __m256d bmd_im = _mm256_sub_pd(b_im, d_im);
+
+                __m256d jbmd_re, jbmd_im;
+                if (fwd) { jbmd_re = _mm256_xor_pd(bmd_im, neg); jbmd_im = bmd_re; }
+                else     { jbmd_re = bmd_im; jbmd_im = _mm256_xor_pd(bmd_re, neg); }
+
+                // out0 = apc + bpd (no twiddle)
+                _mm256_storeu_pd(dst_re + base + p, _mm256_add_pd(apc_re, bpd_re));
+                _mm256_storeu_pd(dst_im + base + p, _mm256_add_pd(apc_im, bpd_im));
+
+                // out1 = (amc - jbmd) * w1
+                __m256d t_re = _mm256_sub_pd(amc_re, jbmd_re);
+                __m256d t_im = _mm256_sub_pd(amc_im, jbmd_im);
+                __m256d r_re = _mm256_mul_pd(t_re, w1_re);
+                r_re = _mm256_fnmadd_pd(t_im, w1_im, r_re);
+                __m256d r_im = _mm256_mul_pd(t_im, w1_re);
+                r_im = _mm256_fmadd_pd(t_re, w1_im, r_im);
+                _mm256_storeu_pd(dst_re + base + q + p, r_re);
+                _mm256_storeu_pd(dst_im + base + q + p, r_im);
+
+                // out2 = (apc - bpd) * w2
+                t_re = _mm256_sub_pd(apc_re, bpd_re);
+                t_im = _mm256_sub_pd(apc_im, bpd_im);
+                r_re = _mm256_mul_pd(t_re, w2_re);
+                r_re = _mm256_fnmadd_pd(t_im, w2_im, r_re);
+                r_im = _mm256_mul_pd(t_im, w2_re);
+                r_im = _mm256_fmadd_pd(t_re, w2_im, r_im);
+                _mm256_storeu_pd(dst_re + base + 2*q + p, r_re);
+                _mm256_storeu_pd(dst_im + base + 2*q + p, r_im);
+
+                // out3 = (amc + jbmd) * w3
+                t_re = _mm256_add_pd(amc_re, jbmd_re);
+                t_im = _mm256_add_pd(amc_im, jbmd_im);
+                r_re = _mm256_mul_pd(t_re, w3_re);
+                r_re = _mm256_fnmadd_pd(t_im, w3_im, r_re);
+                r_im = _mm256_mul_pd(t_im, w3_re);
+                r_im = _mm256_fmadd_pd(t_re, w3_im, r_im);
+                _mm256_storeu_pd(dst_re + base + 3*q + p, r_re);
+                _mm256_storeu_pd(dst_im + base + 3*q + p, r_im);
             }
         }
+
+        tw += s * 6;
+        double *t;
+        t = src_re; src_re = dst_re; dst_re = t;
+        t = src_im; src_im = dst_im; dst_im = t;
+        s *= 4; q /= 4;
+    }
+
+    // Final pass
+    if (q == 1) {
+        const int32_t stride = s;
+        for (int32_t j = 0; j < s; j += 4) {
+            __m256d a_re = _mm256_loadu_pd(src_re + j);
+            __m256d a_im = _mm256_loadu_pd(src_im + j);
+            __m256d c_re = _mm256_loadu_pd(src_re + j + 2*stride);
+            __m256d c_im = _mm256_loadu_pd(src_im + j + 2*stride);
+            __m256d apc_re = _mm256_add_pd(a_re, c_re);
+            __m256d apc_im = _mm256_add_pd(a_im, c_im);
+            __m256d amc_re = _mm256_sub_pd(a_re, c_re);
+            __m256d amc_im = _mm256_sub_pd(a_im, c_im);
+            __m256d b_re = _mm256_loadu_pd(src_re + j + stride);
+            __m256d b_im = _mm256_loadu_pd(src_im + j + stride);
+            __m256d d_re = _mm256_loadu_pd(src_re + j + 3*stride);
+            __m256d d_im = _mm256_loadu_pd(src_im + j + 3*stride);
+            __m256d bpd_re = _mm256_add_pd(b_re, d_re);
+            __m256d bpd_im = _mm256_add_pd(b_im, d_im);
+            __m256d bmd_re = _mm256_sub_pd(b_re, d_re);
+            __m256d bmd_im = _mm256_sub_pd(b_im, d_im);
+            __m256d jbmd_re, jbmd_im;
+            if (fwd) { jbmd_re = _mm256_xor_pd(bmd_im, neg); jbmd_im = bmd_re; }
+            else     { jbmd_re = bmd_im; jbmd_im = _mm256_xor_pd(bmd_re, neg); }
+            // Scatter to Stockham positions
+            double t_re[16], t_im[16];
+            _mm256_storeu_pd(t_re+0, _mm256_add_pd(apc_re, bpd_re));
+            _mm256_storeu_pd(t_im+0, _mm256_add_pd(apc_im, bpd_im));
+            _mm256_storeu_pd(t_re+4, _mm256_sub_pd(amc_re, jbmd_re));
+            _mm256_storeu_pd(t_im+4, _mm256_sub_pd(amc_im, jbmd_im));
+            _mm256_storeu_pd(t_re+8, _mm256_sub_pd(apc_re, bpd_re));
+            _mm256_storeu_pd(t_im+8, _mm256_sub_pd(apc_im, bpd_im));
+            _mm256_storeu_pd(t_re+12, _mm256_add_pd(amc_re, jbmd_re));
+            _mm256_storeu_pd(t_im+12, _mm256_add_pd(amc_im, jbmd_im));
+            for (int k = 0; k < 4; k++)
+                for (int r = 0; r < 4; r++) {
+                    dst_re[4*(j+k)+r] = t_re[r*4+k];
+                    dst_im[4*(j+k)+r] = t_im[r*4+k];
+                }
+        }
     } else if (q == 2) {
-        // Final radix-2
-        int32_t half = ns2 / 2;
+        const int32_t half = ns2 / 2;
         for (int32_t j = 0; j < half; j += 4) {
             __m256d a_re = _mm256_loadu_pd(src_re + j);
             __m256d a_im = _mm256_loadu_pd(src_im + j);
             __m256d b_re = _mm256_loadu_pd(src_re + j + half);
             __m256d b_im = _mm256_loadu_pd(src_im + j + half);
-            // Scatter: position 2j+r for r=0,1
-            double sr[8], si[8], ar[4], ai[4], br[4], bi[4];
+            double ar[4], ai[4], br[4], bi[4];
             _mm256_storeu_pd(ar, _mm256_add_pd(a_re, b_re));
             _mm256_storeu_pd(ai, _mm256_add_pd(a_im, b_im));
             _mm256_storeu_pd(br, _mm256_sub_pd(a_re, b_re));
@@ -366,12 +260,12 @@ static void stockham_r4_split(
         }
     }
 
-    // Copy result back to re/im if needed
     if (dst_re != re) {
         memcpy(re, dst_re, ns2 * sizeof(double));
         memcpy(im, dst_im, ns2 * sizeof(double));
     }
 }
+
 
 // ── Table construction ──────────────────────────────────────────────────────
 
