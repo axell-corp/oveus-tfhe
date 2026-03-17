@@ -62,6 +62,10 @@ elseif(USE_SPQLIOS_INTL)
   target_link_libraries(tfhe++ INTERFACE spqlios-intl)
   target_include_directories(
     tfhe++ PUBLIC ${PROJECT_SOURCE_DIR}/thirdparties/spqlios-intl)
+elseif(USE_SPQLIOS_STOCKHAM)
+  target_link_libraries(tfhe++ INTERFACE spqlios-stockham)
+  target_include_directories(
+    tfhe++ PUBLIC ${PROJECT_SOURCE_DIR}/thirdparties/spqlios-stockham)
 else()
   if(USE_MKL)
     target_link_libraries(tfhe++ INTERFACE mklproc)
