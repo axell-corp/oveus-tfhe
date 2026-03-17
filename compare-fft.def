@@ -53,11 +53,18 @@ From: ubuntu:24.04
     cd "${WORKSPACE}/TFHEpp"
     git clone --depth 1 https://github.com/zama-ai/tfhe-rs.git tfhe-rs
 
-    # ── Build TFHEpp bench_fft ─────────────────────────────────────────────
-    cmake . -B build -G Ninja \
+    # ── Build TFHEpp bench_fft (split layout — default SPQLIOS) ────────────
+    cmake . -B build-split -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DENABLE_BENCHMARK=ON
-    cmake --build build --target bench_fft
+    cmake --build build-split --target bench_fft
+
+    # ── Build TFHEpp bench_fft (interleaved layout — SPQLIOS_INTL) ─────────
+    cmake . -B build-intl -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DUSE_SPQLIOS_INTL=ON \
+        -DENABLE_BENCHMARK=ON
+    cmake --build build-intl --target bench_fft
 
     # ── Build tfhe-rs FFT benchmark ────────────────────────────────────────
     cd bench-tfhers-fft
@@ -66,12 +73,16 @@ From: ubuntu:24.04
     cd ..
 
     # Remove large intermediate artefacts
-    rm -rf build/_deps build/CMakeFiles
+    rm -rf build-split/_deps build-split/CMakeFiles
+    rm -rf build-intl/_deps build-intl/CMakeFiles
     rm -rf bench-tfhers-fft/target/debug
 
 %runscript
     export PATH="/root/.cargo/bin:${PATH}"
     TFHEPP_ROOT="/opt/fft-compare/TFHEpp"
+
+    BENCH_FILTER="lvl1|RawIFFT.512.|RawFFT.512.|RawIFFTMulFFT.512."
+    BENCH_OPTS="--benchmark_repetitions=5 --benchmark_display_aggregates_only=true"
 
     echo "============================================================"
     echo "  TFHEpp vs tfhe-rs — FFT micro-benchmark comparison"
@@ -84,11 +95,14 @@ From: ubuntu:24.04
     free -h 2>/dev/null || true
     echo ""
 
-    echo "--- TFHEpp FFT (C++, SPQLIOS AVX-512) ---"
-    "${TFHEPP_ROOT}/build/benchmark/bench_fft" \
-        --benchmark_filter="lvl1|RawIFFT.512.|RawFFT.512.|RawIFFTMulFFT.512." \
-        --benchmark_repetitions=5 \
-        --benchmark_display_aggregates_only=true
+    echo "--- TFHEpp FFT (split layout, SPQLIOS) ---"
+    "${TFHEPP_ROOT}/build-split/benchmark/bench_fft" \
+        --benchmark_filter="${BENCH_FILTER}" ${BENCH_OPTS}
+    echo ""
+
+    echo "--- TFHEpp FFT (interleaved layout, SPQLIOS_INTL) ---"
+    "${TFHEPP_ROOT}/build-intl/benchmark/bench_fft" \
+        --benchmark_filter="${BENCH_FILTER}" ${BENCH_OPTS}
     echo ""
 
     echo "--- tfhe-rs FFT (Rust, concrete-fft) ---"
@@ -97,8 +111,8 @@ From: ubuntu:24.04
     echo "Done."
 
 %help
-    Runs FFT micro-benchmarks comparing TFHEpp (SPQLIOS) and tfhe-rs
-    (concrete-fft) at polynomial size N=512.
+    Runs FFT micro-benchmarks comparing TFHEpp (split + interleaved) and
+    tfhe-rs (concrete-fft) at polynomial size N=512.
 
     Benchmarks:
       - Forward FFT (coefficient -> Fourier domain)

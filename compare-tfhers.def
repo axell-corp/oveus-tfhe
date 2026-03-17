@@ -5,7 +5,7 @@ From: ubuntu:24.04
 # compare-tfhers.def — Apptainer image for local TFHEpp vs tfhe-rs comparison
 #
 # Build (from the TFHEpp repository root, submodules must be initialised):
-#   git submodule update --init --recursive   # if not done yet
+#   git submodule update --init --recursive
 #   apptainer build compare-tfhers.sif compare-tfhers.def
 #
 # Run the benchmark:
@@ -54,14 +54,24 @@ From: ubuntu:24.04
     cd "${WORKSPACE}/TFHEpp"
     git clone --depth 1 https://github.com/zama-ai/tfhe-rs.git tfhe-rs
 
-    # ── Build TFHEpp pbs_tfhers benchmark ────────────────────────────────────
-    cmake . -B build -G Ninja \
+    # ── Build TFHEpp pbs_tfhers (split layout — default SPQLIOS) ────────────
+    cmake . -B build-split -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CXX_COMPILER=g++-14 \
         -DCMAKE_C_COMPILER=gcc-14 \
         -DUSE_TFHE_RS=ON \
         -DENABLE_TEST=ON
-    cmake --build build --target pbs_tfhers
+    cmake --build build-split --target pbs_tfhers
+
+    # ── Build TFHEpp pbs_tfhers (interleaved layout — SPQLIOS_INTL) ─────────
+    cmake . -B build-intl -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CXX_COMPILER=g++-14 \
+        -DCMAKE_C_COMPILER=gcc-14 \
+        -DUSE_TFHE_RS=ON \
+        -DUSE_SPQLIOS_INTL=ON \
+        -DENABLE_TEST=ON
+    cmake --build build-intl --target pbs_tfhers
 
     # ── Build tfhe-rs Rust benchmark ─────────────────────────────────────────
     cd bench-tfhers
@@ -71,7 +81,8 @@ From: ubuntu:24.04
     cd ..
 
     # Remove large intermediate artefacts to keep image size small
-    rm -rf build/_deps build/CMakeFiles
+    rm -rf build-split/_deps build-split/CMakeFiles
+    rm -rf build-intl/_deps build-intl/CMakeFiles
 
 %runscript
     export PATH="/root/.cargo/bin:${PATH}"
@@ -90,8 +101,12 @@ From: ubuntu:24.04
     free -h 2>/dev/null || true
     echo ""
 
-    echo "--- TFHEpp (C++, USE_TFHE_RS) ---"
-    "${TFHEPP_ROOT}/build/test/pbs_tfhers"
+    echo "--- TFHEpp (split layout, SPQLIOS) ---"
+    "${TFHEPP_ROOT}/build-split/test/pbs_tfhers"
+    echo ""
+
+    echo "--- TFHEpp (interleaved layout, SPQLIOS_INTL) ---"
+    "${TFHEPP_ROOT}/build-intl/test/pbs_tfhers"
     echo ""
 
     echo "--- tfhe-rs (Rust, DEFAULT_PARAMETERS) ---"
@@ -100,8 +115,9 @@ From: ubuntu:24.04
     echo "Done."
 
 %help
-    Runs a NAND gate bootstrapping benchmark comparing TFHEpp and tfhe-rs
-    using identical parameters (tfhe-rs DEFAULT_PARAMETERS, 132-bit security).
+    Runs a NAND gate bootstrapping benchmark comparing TFHEpp (split + intl)
+    and tfhe-rs using identical parameters (tfhe-rs DEFAULT_PARAMETERS,
+    132-bit security).
 
     Prerequisites (on the build host):
         git submodule update --init --recursive

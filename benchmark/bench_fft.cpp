@@ -215,7 +215,17 @@ static void BM_RawIFFTMulFFT(benchmark::State& state)
 
     for (auto _ : state) {
         proc.execute_reverse_torus32(ffta.data(), a.data());
-        // pointwise complex multiply (split re/im layout)
+        // pointwise complex multiply
+#ifdef USE_INTERLEAVED_FORMAT
+        // Interleaved layout: [re0, im0, re1, im1, ...]
+        for (int i = 0; i < N; i += 2) {
+            double are = ffta[i], aim = ffta[i + 1];
+            double bre = fftb[i], bim = fftb[i + 1];
+            ffta[i]     = are * bre - aim * bim;
+            ffta[i + 1] = are * bim + aim * bre;
+        }
+#else
+        // Split layout: [re0..re_{n/2}, im0..im_{n/2}]
         const int ns2 = N / 2;
         for (int i = 0; i < ns2; i++) {
             double are = ffta[i], aim = ffta[i + ns2];
@@ -223,6 +233,7 @@ static void BM_RawIFFTMulFFT(benchmark::State& state)
             ffta[i]       = are * bre - aim * bim;
             ffta[i + ns2] = are * bim + aim * bre;
         }
+#endif
         proc.execute_direct_torus32(res.data(), ffta.data());
         benchmark::DoNotOptimize(res.data());
     }

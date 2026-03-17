@@ -1,8 +1,23 @@
 build
 build-*
-bench-tfhers/
-bench-tfhers-fft/
 .vscode
 .claude
 *.sif
 tfhe-rs/
+
+# bench-tfhers: track Rust sources, ignore build artifacts
+bench-tfhers/target/
+bench-tfhers/Cargo.lock
+# Stale CMake build artifacts left in bench-tfhers/
+bench-tfhers/benchmark/
+bench-tfhers/src/CMakeFiles/
+bench-tfhers/src/Makefile
+bench-tfhers/src/cmake_install.cmake
+bench-tfhers/src/libtfhe++.a
+bench-tfhers/test/
+bench-tfhers/thirdparties/
+bench-tfhers/cmake_install.cmake
+
+# bench-tfhers-fft: track Rust sources, ignore build artifacts
+bench-tfhers-fft/target/
+bench-tfhers-fft/Cargo.lock
