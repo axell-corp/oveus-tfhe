@@ -36,6 +36,69 @@ static double accurate_sin(int32_t i, int32_t n) {
     return sin(2.*M_PI*i/double(n));
 }
 
+#ifdef USE_AVX512
+
+// ── Complex arithmetic with AVX512 ──────────────────────────────────────────
+// Each ZMM holds 4 complex values: [re0,im0, re1,im1, re2,im2, re3,im3]
+
+static inline __m512d cmul512(__m512d a, __m512d w) {
+    __m512d w_swap = _mm512_permute_pd(w, 0x55);        // swap re/im pairs
+    __m512d a_re = _mm512_unpacklo_pd(a, a);             // broadcast re
+    __m512d a_im = _mm512_unpackhi_pd(a, a);             // broadcast im
+    return _mm512_fmaddsub_pd(a_re, w, _mm512_mul_pd(a_im, w_swap));
+}
+
+// Multiply by j: [re,im] → [-im,re]
+static inline __m512d mul_j_fwd512(__m512d x) {
+    __m512d swapped = _mm512_permute_pd(x, 0x55);
+    return _mm512_xor_pd(swapped,
+        _mm512_set_pd(0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0));
+}
+
+// Multiply by -j: [re,im] → [im,-re]
+static inline __m512d mul_j_inv512(__m512d x) {
+    __m512d swapped = _mm512_permute_pd(x, 0x55);
+    return _mm512_xor_pd(swapped,
+        _mm512_set_pd(-0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0));
+}
+
+// Radix-4 butterfly with twiddle (4 complex per ZMM)
+static inline void radix4_dit_butterfly512(
+    __m512d a, __m512d b, __m512d c, __m512d d,
+    __m512d w1, __m512d w2, __m512d w3, bool fwd,
+    __m512d &out0, __m512d &out1, __m512d &out2, __m512d &out3)
+{
+    __m512d apc = _mm512_add_pd(a, c);
+    __m512d amc = _mm512_sub_pd(a, c);
+    __m512d bpd = _mm512_add_pd(b, d);
+    __m512d bmd = _mm512_sub_pd(b, d);
+    __m512d jbmd = fwd ? mul_j_fwd512(bmd) : mul_j_inv512(bmd);
+
+    out0 = _mm512_add_pd(apc, bpd);
+    out1 = cmul512(_mm512_sub_pd(amc, jbmd), w1);
+    out2 = cmul512(_mm512_sub_pd(apc, bpd), w2);
+    out3 = cmul512(_mm512_add_pd(amc, jbmd), w3);
+}
+
+// Last radix-4 butterfly (no twiddle)
+static inline void radix4_last_butterfly512(
+    __m512d a, __m512d b, __m512d c, __m512d d, bool fwd,
+    __m512d &out0, __m512d &out1, __m512d &out2, __m512d &out3)
+{
+    __m512d apc = _mm512_add_pd(a, c);
+    __m512d amc = _mm512_sub_pd(a, c);
+    __m512d bpd = _mm512_add_pd(b, d);
+    __m512d bmd = _mm512_sub_pd(b, d);
+    __m512d jbmd = fwd ? mul_j_fwd512(bmd) : mul_j_inv512(bmd);
+
+    out0 = _mm512_add_pd(apc, bpd);
+    out1 = _mm512_sub_pd(amc, jbmd);
+    out2 = _mm512_sub_pd(apc, bpd);
+    out3 = _mm512_add_pd(amc, jbmd);
+}
+
+#else  // AVX2
+
 // ── Complex arithmetic with AVX2 ────────────────────────────────────────────
 
 // Complex multiply: a * w
@@ -98,6 +161,8 @@ static inline void radix4_last_butterfly(
     out3 = _mm256_add_pd(amc, jbmd);
 }
 
+#endif  // USE_AVX512
+
 // ── Table structures ────────────────────────────────────────────────────────
 
 struct INTL_FFT_PRECOMP {
@@ -110,7 +175,109 @@ struct INTL_FFT_PRECOMP {
     void *buf;             // single allocation
 };
 
-// ── Stockham radix-4 FFT ────────────────────────────────────────────────────
+#ifdef USE_AVX512
+
+// ── AVX512 interleave/de-interleave index vectors ──────────────────────────
+// Used by conversion loops: 8 re + 8 im → [re0,im0,...,re7,im7] (2 ZMMs)
+static const __m512i idx_intl_lo = _mm512_set_epi64(11, 3, 10, 2,  9, 1,  8, 0);
+static const __m512i idx_intl_hi = _mm512_set_epi64(15, 7, 14, 6, 13, 5, 12, 4);
+// Reverse: [re0,im0,...] (2 ZMMs) → 8 re, 8 im
+static const __m512i idx_deinl_re = _mm512_set_epi64(14, 12, 10, 8, 6, 4, 2, 0);
+static const __m512i idx_deinl_im = _mm512_set_epi64(15, 13, 11, 9, 7, 5, 3, 1);
+
+// ── Stockham radix-4 FFT (AVX512) ──────────────────────────────────────────
+// Each ZMM processes 4 complex values at a time.
+// src_ro: read-only initial source (may differ from x for zero-copy FFT).
+// x, y: writable work/scratch buffers.
+
+static void stockham_r4_from(int32_t ns2, bool fwd, const double *trig,
+                             const double *src_ro, double *x, double *y) {
+    const double *src = src_ro;
+    double *dst = y;
+    const double *tw = trig;
+    int32_t q = ns2 / 4;
+    int32_t s = 1;
+
+    while (q >= 4) {
+        int32_t stride = q * s;
+        if (s == 1) {
+            for (int32_t p = 0; p < q; p += 4) {
+                __m512d a = _mm512_loadu_pd(src + p * 2);
+                __m512d b = _mm512_loadu_pd(src + (p + stride) * 2);
+                __m512d c = _mm512_loadu_pd(src + (p + 2*stride) * 2);
+                __m512d d = _mm512_loadu_pd(src + (p + 3*stride) * 2);
+                __m512d r0, r1, r2, r3;
+                radix4_last_butterfly512(a, b, c, d, fwd, r0, r1, r2, r3);
+                _mm512_storeu_pd(dst + p * 2, r0);
+                _mm512_storeu_pd(dst + (p + q) * 2, r1);
+                _mm512_storeu_pd(dst + (p + 2*q) * 2, r2);
+                _mm512_storeu_pd(dst + (p + 3*q) * 2, r3);
+            }
+        } else {
+            for (int32_t j = 0; j < s; j += 4) {
+                __m512d w1 = _mm512_loadu_pd(tw); tw += 8;
+                __m512d w2 = _mm512_loadu_pd(tw); tw += 8;
+                __m512d w3 = _mm512_loadu_pd(tw); tw += 8;
+                for (int32_t p = 0; p < q; p++) {
+                    int32_t idx = j + s * p;
+                    __m512d a = _mm512_loadu_pd(src + idx * 2);
+                    __m512d b = _mm512_loadu_pd(src + (idx + stride) * 2);
+                    __m512d c = _mm512_loadu_pd(src + (idx + 2*stride) * 2);
+                    __m512d d = _mm512_loadu_pd(src + (idx + 3*stride) * 2);
+                    int32_t o = p + q * (4 * j);
+                    __m512d r0, r1, r2, r3;
+                    radix4_dit_butterfly512(a, b, c, d, w1, w2, w3, fwd, r0, r1, r2, r3);
+                    _mm512_storeu_pd(dst + o * 2, r0);
+                    _mm512_storeu_pd(dst + (o + q) * 2, r1);
+                    _mm512_storeu_pd(dst + (o + 2*q) * 2, r2);
+                    _mm512_storeu_pd(dst + (o + 3*q) * 2, r3);
+                }
+            }
+        }
+        // After first pass, switch to mutable buffers
+        if (s == 1) { src = dst; dst = x; }
+        else { const double *tmp = src; src = dst; dst = const_cast<double*>(tmp); }
+        s *= 4; q /= 4;
+    }
+    if (q == 1) {
+        int32_t stride = s;
+        for (int32_t j = 0; j < s; j += 4) {
+            __m512d a = _mm512_loadu_pd(src + j * 2);
+            __m512d b = _mm512_loadu_pd(src + (j + stride) * 2);
+            __m512d c = _mm512_loadu_pd(src + (j + 2*stride) * 2);
+            __m512d d = _mm512_loadu_pd(src + (j + 3*stride) * 2);
+            __m512d r0, r1, r2, r3;
+            radix4_last_butterfly512(a, b, c, d, fwd, r0, r1, r2, r3);
+            _mm512_storeu_pd(dst + (4*j) * 2, r0);
+            _mm512_storeu_pd(dst + (4*j + 4) * 2, r1);
+            _mm512_storeu_pd(dst + (4*j + 8) * 2, r2);
+            _mm512_storeu_pd(dst + (4*j + 12) * 2, r3);
+        }
+    } else if (q == 2) {
+        int32_t half = ns2 / 2;
+        for (int32_t j = 0; j < half; j += 4) {
+            __m512d a = _mm512_loadu_pd(src + j * 2);
+            __m512d b = _mm512_loadu_pd(src + (j + half) * 2);
+            __m512d sum = _mm512_add_pd(a, b);
+            __m512d diff = _mm512_sub_pd(a, b);
+            __m512d out0 = _mm512_shuffle_f64x2(sum, diff, 0x44);
+            __m512d out1 = _mm512_shuffle_f64x2(sum, diff, 0xEE);
+            _mm512_storeu_pd(dst + (2*j) * 2, out0);
+            _mm512_storeu_pd(dst + (2*j + 4) * 2, out1);
+        }
+    }
+    // Ensure result ends up in x
+    if (dst != x) memcpy(x, dst, ns2 * 2 * sizeof(double));
+}
+
+// Convenience wrapper: src and work buffer are the same (in-place)
+static void stockham_r4(int32_t ns2, bool fwd, const double *trig, double *x, double *y) {
+    stockham_r4_from(ns2, fwd, trig, x, x, y);
+}
+
+#else  // AVX2
+
+// ── Stockham radix-4 FFT (AVX2) ────────────────────────────────────────────
 // Reads from 4 quarters of src, writes interleaved to dst.
 // Each pass reduces the quarter size by 4x.
 
@@ -177,32 +344,50 @@ static void stockham_r4(int32_t ns2, bool fwd, const double *trig, double *x, do
     if (dst != x) memcpy(x, dst, ns2 * 2 * sizeof(double));
 }
 
+#endif  // USE_AVX512
+
 // ── Forward/Inverse FFT wrappers ────────────────────────────────────────────
 
-static void intl_fft(const INTL_FFT_PRECOMP *tables, double *c) {
+// Forward FFT: Stockham + twist.  Reads from src_in (may be != c).
+// Scale factor (2/N) is pre-baked into the forward twist twiddles.
+static void intl_fft_from(const INTL_FFT_PRECOMP *tables, const double *src_in,
+                          double *c) {
     const int32_t ns2 = tables->ns2;
     const double *trig = tables->trig_fwd;
 
-    // Compute total twiddle size to find twist offset
-    int32_t tw_count = 0;
-    for (int32_t s = 1; 4*s < ns2; s *= 4)
-        tw_count += s * 3;  // s/2 groups × 6 doubles each... actually s groups × 3 complex × 2 doubles / 2 per YMM
+#ifdef USE_AVX512
+    stockham_r4_from(ns2, true, trig, src_in, c, tables->scratch);
 
-    // Run Stockham radix-4
+    const double *tw_twist = trig;
+    for (int32_t s = 4; 4*s < ns2; s *= 4)
+        tw_twist += (s / 4) * 24;
+
+    for (int32_t j = 0; j < ns2; j += 4) {
+        double *p = c + j * 2;
+        __m512d a = _mm512_load_pd(p);
+        __m512d w = _mm512_load_pd(tw_twist + j * 2);
+        _mm512_store_pd(p, cmul512(a, w));
+    }
+#else
+    // AVX2: must copy first since stockham_r4 needs mutable src
+    if (src_in != c) memcpy(c, src_in, ns2 * 2 * sizeof(double));
     stockham_r4(ns2, true, trig, c, tables->scratch);
 
-    // Apply final twist
     const double *tw_twist = trig;
-    // Skip past butterfly twiddles
     for (int32_t s = 1; 4*s < ns2; s *= 4)
-        tw_twist += (s / 2) * 12;  // s/2 groups × 12 doubles per group
-    // Twist: multiply each complex by exp(-2πi*k/(2N))
+        tw_twist += (s / 2) * 12;
+
     for (int32_t j = 0; j < ns2; j += 2) {
         double *p = c + j * 2;
         __m256d a = _mm256_load_pd(p);
         __m256d w = _mm256_load_pd(tw_twist + j * 2);
         _mm256_store_pd(p, cmul(a, w));
     }
+#endif
+}
+
+static void intl_fft(const INTL_FFT_PRECOMP *tables, double *c) {
+    intl_fft_from(tables, c, c);
 }
 
 static void intl_ifft(const INTL_FFT_PRECOMP *tables, double *c) {
@@ -211,12 +396,21 @@ static void intl_ifft(const INTL_FFT_PRECOMP *tables, double *c) {
 
     // Apply twist first (inverse direction)
     const double *tw_twist = trig;
+#ifdef USE_AVX512
+    for (int32_t j = 0; j < ns2; j += 4) {
+        double *p = c + j * 2;
+        __m512d a = _mm512_load_pd(p);
+        __m512d w = _mm512_load_pd(tw_twist + j * 2);
+        _mm512_store_pd(p, cmul512(a, w));
+    }
+#else
     for (int32_t j = 0; j < ns2; j += 2) {
         double *p = c + j * 2;
         __m256d a = _mm256_load_pd(p);
         __m256d w = _mm256_load_pd(tw_twist + j * 2);
         _mm256_store_pd(p, cmul(a, w));
     }
+#endif
 
     // Butterfly twiddles start after twist
     const double *tw_bf = trig + ns2 * 2;
@@ -233,28 +427,26 @@ static void build_tables(int32_t nn, INTL_FFT_PRECOMP *reps) {
     reps->n = n;
     reps->ns2 = ns2;
 
-    // Count twiddle table size
-    // Butterfly twiddles: for each pass, s/2 groups of 3 complex (6 doubles each)
+#ifdef USE_AVX512
+    // AVX512: twiddles packed as 4 complex (8 doubles) per ZMM.
+    // First pass (s=1) uses no twiddles.
+    // Subsequent passes (s=4,16,...): j steps by 4, s/4 groups per pass, 3 ZMMs each = 24 doubles.
     int32_t bf_twiddle_doubles = 0;
-    for (int32_t s = 1; 4*s < ns2; s *= 4)
-        bf_twiddle_doubles += (s / 2) * 12;  // s/2 groups × 12 doubles
-    // Handle s=1 specially (1 group instead of 0.5)
-    // Actually for s=1: j goes 0..0 step 2, that's 1 iteration (j=0 only), producing 12 doubles
-    // For s=4: j goes 0,2, that's 2 iterations, producing 24 doubles
-    // For s=16: j goes 0,2,...,14, that's 8 iterations, producing 96 doubles
-    // Let me recompute: for each pass, j goes from 0 to s-1 in steps of 2: s/2 iterations (but at least 1)
-    // Actually s starts at 1, so s/2 = 0 for first pass. Need to handle s=1 as 1 group.
-    bf_twiddle_doubles = 0;
+    for (int32_t s = 4; 4*s < ns2; s *= 4) {
+        bf_twiddle_doubles += (s / 4) * 24;
+    }
+#else
+    int32_t bf_twiddle_doubles = 0;
     for (int32_t s = 1; 4*s < ns2; s *= 4) {
         int32_t groups = (s < 2) ? 1 : s / 2;
         bf_twiddle_doubles += groups * 12;
     }
+#endif
 
-    int32_t twist_doubles = ns2 * 2;  // ns2 complex values
+    int32_t twist_doubles = ns2 * 2;
     int32_t total_per_dir = bf_twiddle_doubles + twist_doubles;
 
-    // Allocate: 2 twiddle tables (fwd+inv) + scratch + data
-    int32_t total_doubles = 2 * total_per_dir + nn + nn;  // 2 trig + scratch + data
+    int32_t total_doubles = 2 * total_per_dir + nn + nn;
     reps->buf = aligned_alloc(64, total_doubles * sizeof(double));
     double *ptr = (double *)reps->buf;
 
@@ -263,17 +455,81 @@ static void build_tables(int32_t nn, INTL_FFT_PRECOMP *reps) {
     reps->scratch = ptr; ptr += nn;
     reps->data = ptr;
 
+#ifdef USE_AVX512
+    // Build forward butterfly twiddles (AVX512: 4 complex per ZMM)
+    double *fwd = reps->trig_fwd;
+    for (int32_t s = 4; 4*s < ns2; s *= 4) {
+        int32_t denom = 4 * s;
+        for (int32_t j = 0; j < s; j += 4) {
+            // w1: exp(-2πi*(j+jj)/(4s)) for jj=0..3
+            for (int32_t jj = 0; jj < 4; jj++) {
+                fwd[jj*2]   = accurate_cos(-(j+jj), denom);
+                fwd[jj*2+1] = accurate_sin(-(j+jj), denom);
+            }
+            fwd += 8;
+            // w2: exp(-2πi*2*(j+jj)/(4s))
+            for (int32_t jj = 0; jj < 4; jj++) {
+                fwd[jj*2]   = accurate_cos(-2*(j+jj), denom);
+                fwd[jj*2+1] = accurate_sin(-2*(j+jj), denom);
+            }
+            fwd += 8;
+            // w3: exp(-2πi*3*(j+jj)/(4s))
+            for (int32_t jj = 0; jj < 4; jj++) {
+                fwd[jj*2]   = accurate_cos(-3*(j+jj), denom);
+                fwd[jj*2+1] = accurate_sin(-3*(j+jj), denom);
+            }
+            fwd += 8;
+        }
+    }
+    // Forward twist: bake in scale factor 2/N so execute_direct can skip scaling
+    {
+        const double scale = 2.0 / nn;
+        for (int32_t k = 0; k < ns2; k++) {
+            *fwd++ = scale * accurate_cos(-k, n);
+            *fwd++ = scale * accurate_sin(-k, n);
+        }
+    }
+
+    // Build inverse twiddles
+    double *inv = reps->trig_inv;
+    // Inverse twist first
+    for (int32_t k = 0; k < ns2; k++) {
+        *inv++ = accurate_cos(k, n);
+        *inv++ = accurate_sin(k, n);
+    }
+    // Inverse butterfly twiddles (positive angles)
+    for (int32_t s = 4; 4*s < ns2; s *= 4) {
+        int32_t denom = 4 * s;
+        for (int32_t j = 0; j < s; j += 4) {
+            for (int32_t jj = 0; jj < 4; jj++) {
+                inv[jj*2]   = accurate_cos(j+jj, denom);
+                inv[jj*2+1] = accurate_sin(j+jj, denom);
+            }
+            inv += 8;
+            for (int32_t jj = 0; jj < 4; jj++) {
+                inv[jj*2]   = accurate_cos(2*(j+jj), denom);
+                inv[jj*2+1] = accurate_sin(2*(j+jj), denom);
+            }
+            inv += 8;
+            for (int32_t jj = 0; jj < 4; jj++) {
+                inv[jj*2]   = accurate_cos(3*(j+jj), denom);
+                inv[jj*2+1] = accurate_sin(3*(j+jj), denom);
+            }
+            inv += 8;
+        }
+    }
+
+#else  // AVX2
     // Build forward butterfly twiddles
     double *fwd = reps->trig_fwd;
     for (int32_t s = 1; 4*s < ns2; s *= 4) {
         for (int32_t j = 0; j < s; j += 2) {
             int32_t denom = 4 * s;
             for (int32_t jj = 0; jj < 2 && (j + jj) < s; jj++) {
-                // w1 = exp(-2πi * (j+jj) / (4s))
                 fwd[0 + jj*2] = accurate_cos(-(j+jj), denom);
                 fwd[1 + jj*2] = accurate_sin(-(j+jj), denom);
             }
-            if (s == 1) { fwd[2] = fwd[0]; fwd[3] = fwd[1]; }  // pad for YMM
+            if (s == 1) { fwd[2] = fwd[0]; fwd[3] = fwd[1]; }
             fwd += 4;
             for (int32_t jj = 0; jj < 2 && (j + jj) < s; jj++) {
                 fwd[0 + jj*2] = accurate_cos(-2*(j+jj), denom);
@@ -289,20 +545,16 @@ static void build_tables(int32_t nn, INTL_FFT_PRECOMP *reps) {
             fwd += 4;
         }
     }
-    // Forward twist: exp(-2πi*k/(2N)) = exp(-2πi*k/n)
     for (int32_t k = 0; k < ns2; k++) {
         *fwd++ = accurate_cos(-k, n);
         *fwd++ = accurate_sin(-k, n);
     }
 
-    // Build inverse twiddles
     double *inv = reps->trig_inv;
-    // Inverse twist first: exp(+2πi*k/n)
     for (int32_t k = 0; k < ns2; k++) {
         *inv++ = accurate_cos(k, n);
         *inv++ = accurate_sin(k, n);
     }
-    // Inverse butterfly twiddles: same structure, positive angles
     for (int32_t s = 1; 4*s < ns2; s *= 4) {
         for (int32_t j = 0; j < s; j += 2) {
             int32_t denom = 4 * s;
@@ -326,6 +578,7 @@ static void build_tables(int32_t nn, INTL_FFT_PRECOMP *reps) {
             inv += 4;
         }
     }
+#endif  // USE_AVX512
 }
 
 // ── Conversion helpers ──────────────────────────────────────────────────────
@@ -372,26 +625,60 @@ FFT_Processor_Spqlios_Intl::~FFT_Processor_Spqlios_Intl() {
 
 void FFT_Processor_Spqlios_Intl::execute_reverse_torus32(double *res, const uint32_t *a) {
     const int32_t *aa = (const int32_t*)a;
+#ifdef USE_AVX512
+    // Vectorized int32→double with interleave
+    for (int32_t i = 0; i < Ns2; i += 8) {
+        __m256i re_i32 = _mm256_loadu_si256((const __m256i*)(aa + i));
+        __m256i im_i32 = _mm256_loadu_si256((const __m256i*)(aa + i + Ns2));
+        __m512d re = _mm512_cvtepi32_pd(re_i32);
+        __m512d im = _mm512_cvtepi32_pd(im_i32);
+        _mm512_storeu_pd(res + 2*i,     _mm512_permutex2var_pd(re, idx_intl_lo, im));
+        _mm512_storeu_pd(res + 2*i + 8, _mm512_permutex2var_pd(re, idx_intl_hi, im));
+    }
+#else
     for (int32_t i = 0; i < Ns2; i++) {
         res[2*i]     = (double)aa[i];
         res[2*i + 1] = (double)aa[i + Ns2];
     }
+#endif
     intl_ifft((const INTL_FFT_PRECOMP*)tables_reverse, res);
 }
 
 void FFT_Processor_Spqlios_Intl::execute_reverse_int(double *res, const int32_t *a) {
+#ifdef USE_AVX512
+    for (int32_t i = 0; i < Ns2; i += 8) {
+        __m256i re_i32 = _mm256_loadu_si256((const __m256i*)(a + i));
+        __m256i im_i32 = _mm256_loadu_si256((const __m256i*)(a + i + Ns2));
+        __m512d re = _mm512_cvtepi32_pd(re_i32);
+        __m512d im = _mm512_cvtepi32_pd(im_i32);
+        _mm512_storeu_pd(res + 2*i,     _mm512_permutex2var_pd(re, idx_intl_lo, im));
+        _mm512_storeu_pd(res + 2*i + 8, _mm512_permutex2var_pd(re, idx_intl_hi, im));
+    }
+#else
     for (int32_t i = 0; i < Ns2; i++) {
         res[2*i]     = (double)a[i];
         res[2*i + 1] = (double)a[i + Ns2];
     }
+#endif
     intl_ifft((const INTL_FFT_PRECOMP*)tables_reverse, res);
 }
 
 void FFT_Processor_Spqlios_Intl::execute_reverse_uint(double *res, const uint32_t *a) {
+#ifdef USE_AVX512
+    for (int32_t i = 0; i < Ns2; i += 8) {
+        __m256i re_i32 = _mm256_loadu_si256((const __m256i*)(a + i));
+        __m256i im_i32 = _mm256_loadu_si256((const __m256i*)(a + i + Ns2));
+        __m512d re = _mm512_cvtepu32_pd(re_i32);
+        __m512d im = _mm512_cvtepu32_pd(im_i32);
+        _mm512_storeu_pd(res + 2*i,     _mm512_permutex2var_pd(re, idx_intl_lo, im));
+        _mm512_storeu_pd(res + 2*i + 8, _mm512_permutex2var_pd(re, idx_intl_hi, im));
+    }
+#else
     for (int32_t i = 0; i < Ns2; i++) {
         res[2*i]     = (double)a[i];
         res[2*i + 1] = (double)a[i + Ns2];
     }
+#endif
     intl_ifft((const INTL_FFT_PRECOMP*)tables_reverse, res);
 }
 
@@ -413,55 +700,80 @@ void FFT_Processor_Spqlios_Intl::execute_reverse_torus64_uint(double *res, const
 }
 
 void FFT_Processor_Spqlios_Intl::execute_direct_torus32(uint32_t *res, const double *a) {
-    const double s = 2.0 / N;
-    for (int32_t i = 0; i < N; i++) real_inout_direct[i] = a[i] * s;
-    intl_fft((const INTL_FFT_PRECOMP*)tables_direct, real_inout_direct);
+    auto *tables = (const INTL_FFT_PRECOMP*)tables_direct;
+    // Scale is baked into forward twist — read input directly, no copy needed
+    intl_fft_from(tables, a, real_inout_direct);
+#ifdef USE_AVX512
+    // Vectorized de-interleave + double→int32 extraction
+    for (int32_t i = 0; i < Ns2; i += 8) {
+        __m512d in0 = _mm512_load_pd(real_inout_direct + 2*i);
+        __m512d in1 = _mm512_load_pd(real_inout_direct + 2*i + 8);
+        __m512d re = _mm512_permutex2var_pd(in0, idx_deinl_re, in1);
+        __m512d im = _mm512_permutex2var_pd(in0, idx_deinl_im, in1);
+        __m256i re_i32 = _mm512_cvtepi64_epi32(_mm512_cvttpd_epi64(re));
+        __m256i im_i32 = _mm512_cvtepi64_epi32(_mm512_cvttpd_epi64(im));
+        _mm256_storeu_si256((__m256i*)(res + i), re_i32);
+        _mm256_storeu_si256((__m256i*)(res + i + Ns2), im_i32);
+    }
+#else
     for (int32_t i = 0; i < Ns2; i++) {
         res[i]       = (uint32_t)(int64_t)real_inout_direct[2*i];
         res[i + Ns2] = (uint32_t)(int64_t)real_inout_direct[2*i + 1];
     }
+#endif
 }
 
 void FFT_Processor_Spqlios_Intl::execute_direct_torus32_add(uint32_t *res, const double *a) {
-    const double s = 2.0 / N;
-    for (int32_t i = 0; i < N; i++) real_inout_direct[i] = a[i] * s;
-    intl_fft((const INTL_FFT_PRECOMP*)tables_direct, real_inout_direct);
+    auto *tables = (const INTL_FFT_PRECOMP*)tables_direct;
+    intl_fft_from(tables, a, real_inout_direct);
+#ifdef USE_AVX512
+    for (int32_t i = 0; i < Ns2; i += 8) {
+        __m512d in0 = _mm512_load_pd(real_inout_direct + 2*i);
+        __m512d in1 = _mm512_load_pd(real_inout_direct + 2*i + 8);
+        __m512d re = _mm512_permutex2var_pd(in0, idx_deinl_re, in1);
+        __m512d im = _mm512_permutex2var_pd(in0, idx_deinl_im, in1);
+        __m256i re_i32 = _mm512_cvtepi64_epi32(_mm512_cvttpd_epi64(re));
+        __m256i im_i32 = _mm512_cvtepi64_epi32(_mm512_cvttpd_epi64(im));
+        __m256i old_re = _mm256_loadu_si256((__m256i*)(res + i));
+        __m256i old_im = _mm256_loadu_si256((__m256i*)(res + i + Ns2));
+        _mm256_storeu_si256((__m256i*)(res + i), _mm256_add_epi32(old_re, re_i32));
+        _mm256_storeu_si256((__m256i*)(res + i + Ns2), _mm256_add_epi32(old_im, im_i32));
+    }
+#else
     for (int32_t i = 0; i < Ns2; i++) {
         res[i]       += (uint32_t)(int64_t)real_inout_direct[2*i];
         res[i + Ns2] += (uint32_t)(int64_t)real_inout_direct[2*i + 1];
     }
+#endif
 }
 
 void FFT_Processor_Spqlios_Intl::execute_direct_torus64(uint64_t *res, double *a) {
-    const double s = 2.0 / N;
-    for (int32_t i = 0; i < N; i++) a[i] *= s;
-    intl_fft((const INTL_FFT_PRECOMP*)tables_direct, a);
+    auto *tables = (const INTL_FFT_PRECOMP*)tables_direct;
+    intl_fft_from(tables, a, real_inout_direct);
     const double magic = 6755399441055744.0;
     const int64_t magic_i = 0x4338000000000000LL;
     for (int32_t i = 0; i < Ns2; i++) {
         union { double d; int64_t l; } u;
-        u.d = a[2*i] + magic; res[i] = (uint64_t)(u.l - magic_i);
-        u.d = a[2*i+1] + magic; res[i+Ns2] = (uint64_t)(u.l - magic_i);
+        u.d = real_inout_direct[2*i] + magic; res[i] = (uint64_t)(u.l - magic_i);
+        u.d = real_inout_direct[2*i+1] + magic; res[i+Ns2] = (uint64_t)(u.l - magic_i);
     }
 }
 
 void FFT_Processor_Spqlios_Intl::execute_direct_torus64_add(uint64_t *res, double *a) {
-    const double s = 2.0 / N;
-    for (int32_t i = 0; i < N; i++) a[i] *= s;
-    intl_fft((const INTL_FFT_PRECOMP*)tables_direct, a);
+    auto *tables = (const INTL_FFT_PRECOMP*)tables_direct;
+    intl_fft_from(tables, a, real_inout_direct);
     const double magic = 6755399441055744.0;
     const int64_t magic_i = 0x4338000000000000LL;
     for (int32_t i = 0; i < Ns2; i++) {
         union { double d; int64_t l; } u;
-        u.d = a[2*i] + magic; res[i] += (uint64_t)(u.l - magic_i);
-        u.d = a[2*i+1] + magic; res[i+Ns2] += (uint64_t)(u.l - magic_i);
+        u.d = real_inout_direct[2*i] + magic; res[i] += (uint64_t)(u.l - magic_i);
+        u.d = real_inout_direct[2*i+1] + magic; res[i+Ns2] += (uint64_t)(u.l - magic_i);
     }
 }
 
 void FFT_Processor_Spqlios_Intl::execute_direct_torus32_q(uint32_t *res, const double *a, const uint32_t q) {
-    const double s = 2.0 / N;
-    for (int32_t i = 0; i < N; i++) real_inout_direct[i] = a[i] * s;
-    intl_fft((const INTL_FFT_PRECOMP*)tables_direct, real_inout_direct);
+    auto *tables = (const INTL_FFT_PRECOMP*)tables_direct;
+    intl_fft_from(tables, a, real_inout_direct);
     for (int32_t i = 0; i < Ns2; i++) {
         res[i] = uint32_t((int64_t(real_inout_direct[2*i])%q+q)%q);
         res[i+Ns2] = uint32_t((int64_t(real_inout_direct[2*i+1])%q+q)%q);
@@ -469,9 +781,8 @@ void FFT_Processor_Spqlios_Intl::execute_direct_torus32_q(uint32_t *res, const d
 }
 
 void FFT_Processor_Spqlios_Intl::execute_direct_torus32_rescale(uint32_t *res, const double *a, const double D) {
-    const double s = 2.0 / N;
-    for (int32_t i = 0; i < N; i++) real_inout_direct[i] = a[i] * s;
-    intl_fft((const INTL_FFT_PRECOMP*)tables_direct, real_inout_direct);
+    auto *tables = (const INTL_FFT_PRECOMP*)tables_direct;
+    intl_fft_from(tables, a, real_inout_direct);
     for (int32_t i = 0; i < Ns2; i++) {
         res[i] = (uint32_t)(int64_t)(real_inout_direct[2*i]/D);
         res[i+Ns2] = (uint32_t)(int64_t)(real_inout_direct[2*i+1]/D);
@@ -484,11 +795,9 @@ void FFT_Processor_Spqlios_Intl::execute_direct_torus32_rescale_clpx(
 }
 
 void FFT_Processor_Spqlios_Intl::execute_direct_torus64_rescale(uint64_t *res, const double *a, const double D) {
-    const double s = 2.0 / N;
-    auto *tables = (INTL_FFT_PRECOMP*)tables_direct;
+    auto *tables = (const INTL_FFT_PRECOMP*)tables_direct;
     alignas(64) double tmp[N];
-    for (int32_t i = 0; i < N; i++) tmp[i] = a[i] * s;
-    intl_fft(tables, tmp);
+    intl_fft_from(tables, a, tmp);
     for (int32_t i = 0; i < Ns2; i++) {
         res[i] = (uint64_t)std::round(tmp[2*i]/D);
         res[i+Ns2] = (uint64_t)std::round(tmp[2*i+1]/D);
