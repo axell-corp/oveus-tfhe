@@ -13,6 +13,7 @@ set(core_test_sources
     gatebootstrappingtlwe2tlwe.cpp
     iks.cpp
     invcircuitbootstrapping.cpp
+    nand.cpp
     polymul.cpp
     trgswenc.cpp)
 

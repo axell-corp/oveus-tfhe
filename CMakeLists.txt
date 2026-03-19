@@ -1,8 +1,13 @@
 cmake_minimum_required(VERSION 3.16)
 project(tfhe++ CXX C)
 set(CMAKE_CXX_STANDARD 20)
+set(TFHEPP_ARCH_FLAGS
+    "-march=native"
+    CACHE STRING
+          "Architecture-specific compiler flags for TFHEpp and its bundled SIMD backends")
+
 set(CMAKE_CXX_FLAGS
-    "-march=native -O3 -g -funroll-loops -Wall -Wextra -pedantic -Wno-sign-compare"
+    "${TFHEPP_ARCH_FLAGS} -O3 -g -funroll-loops -Wall -Wextra -pedantic -Wno-sign-compare"
 )
 
 option(USE_RANDEN "Use randen as CSPRNG" ON)

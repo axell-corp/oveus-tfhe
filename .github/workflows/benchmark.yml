@@ -22,7 +22,7 @@ jobs:
         submodules: recursive
     - name: build TFHEpp
       run: |
-        cmake . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_TEST=ON
+        cmake . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DTFHEPP_ARCH_FLAGS='-march=x86-64-v3 -maes -mpclmul' -DENABLE_TEST=ON
         cd build
         ninja
     - name: build original TFHE
