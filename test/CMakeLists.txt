@@ -18,6 +18,11 @@ set(core_test_sources
 
 set(enabled_test_sources ${core_test_sources})
 
+if(USE_TFHE_RS)
+    list(APPEND enabled_test_sources
+        pbs_tfhers.cpp)
+endif()
+
 foreach(test_source ${test_sources})
     if(NOT test_source IN_LIST enabled_test_sources)
         continue()
