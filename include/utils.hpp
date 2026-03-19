@@ -128,11 +128,21 @@ inline uint32_t dtot32(double d)
     return int32_t(int64_t((d - int64_t(d)) * (1LL << 32)));
 }
 
+inline uint16_t dtot16(double d)
+{
+    return int16_t(int64_t((d - int64_t(d)) * (1LL << 16)));
+}
+
 // Modular Gaussian Distribution over Torus
 template <class P>
 inline typename P::T ModularGaussian(typename P::T center, double stdev)
 {
-    if constexpr (std::is_same_v<typename P::T, uint32_t>) {
+    if constexpr (std::is_same_v<typename P::T, uint16_t>) {
+        std::normal_distribution<double> distribution(0., stdev);
+        double err = distribution(generator);
+        return center + dtot16(err);
+    }
+    else if constexpr (std::is_same_v<typename P::T, uint32_t>) {
         // 32bit fixed-point number version
         std::normal_distribution<double> distribution(0., stdev);
         double err = distribution(generator);

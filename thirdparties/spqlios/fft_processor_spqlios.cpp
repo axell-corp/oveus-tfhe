@@ -4,6 +4,7 @@
 
 #include<params.hpp>
 
+#include "x86.h"
 #include "fft_processor_spqlios.h"
 
 using namespace std;

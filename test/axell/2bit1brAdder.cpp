@@ -15,6 +15,7 @@ int main()
     TFHEpp::SecretKey* sk = new TFHEpp::SecretKey();
     TFHEpp::EvalKey ek;
     ek.emplacebkfft<TFHEpp::lvl01param>(*sk);
+    ek.emplacebkfft<TFHEpp::lvl0Mparam>(*sk);
     ek.emplaceiksk<TFHEpp::lvl10param>(*sk);
     std::vector<uint8_t> pa(num_test);
     std::vector<uint8_t> pb(num_test);
@@ -31,14 +32,18 @@ int main()
             ca[i][j] = TFHEpp::tlweSymEncrypt<TFHEpp::lvl1param>(
                 (pa[i]>>j)&1 ? TFHEpp::lvlMparam::μ : -TFHEpp::lvlMparam::μ,
                 TFHEpp::lvl1param::α, sk->key.lvl1);
-            TFHEpp::GateBootstrapping<TFHEpp::lvlMparam::μ>(ca[i][j],ca[i][j],ek);
+            TFHEpp::GateBootstrapping<TFHEpp::lvl10param, TFHEpp::lvl0Mparam,
+                                      TFHEpp::lvlMparam::μ>(ca[i][j], ca[i][j],
+                                                            ek);
         }
     for (int i = 0; i < num_test; i++)
         for(int j = 0; j<2; j++){
             cb[i][j] = TFHEpp::tlweSymEncrypt<TFHEpp::lvl1param>(
                 (pb[i]>>j)&1 ? TFHEpp::lvlMparam::μ : -TFHEpp::lvlMparam::μ,
                 TFHEpp::lvl1param::α, sk->key.lvl1);
-            TFHEpp::GateBootstrapping<TFHEpp::lvlMparam::μ>(cb[i][j],cb[i][j],ek);
+            TFHEpp::GateBootstrapping<TFHEpp::lvl10param, TFHEpp::lvl0Mparam,
+                                      TFHEpp::lvlMparam::μ>(cb[i][j], cb[i][j],
+                                                            ek);
         }
 
     std::chrono::system_clock::time_point start, end;

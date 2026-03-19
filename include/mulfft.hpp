@@ -43,7 +43,11 @@ inline void TwistNTT(Polynomial<P> &res, PolynomialNTT<P> &a)
     // AHlvl1param shares the same polynomial ring as lvl1param (same nbit/n),
     // so it uses the lvl1 NTT tables regardless of its Torus type.
     if constexpr (std::is_same_v<P, lvl1param> ||
-                  std::is_same_v<P, AHlvl1param>)
+                  std::is_same_v<P, AHlvl1param>
+#ifdef ENABLE_AXELL
+                  || std::is_same_v<P, TFHEpp::lvlMparam>
+#endif
+    )
 #ifdef USE_HEXL
     {
         std::array<uint64_t, lvl1param::n> temp;
@@ -66,8 +70,11 @@ template <class P>
 inline void TwistFFT(Polynomial<P> &res, PolynomialInFD<P> &a)
 {
     if constexpr (std::is_same_v<P, lvl1param> ||
-                  std::is_same_v<P, TFHEpp::lvlMparam> ||
-                  std::is_same_v<P, AHlvl1param>) {
+                  std::is_same_v<P, AHlvl1param>
+#ifdef ENABLE_AXELL
+                  || std::is_same_v<P, TFHEpp::lvlMparam>
+#endif
+    ) {
         if constexpr (std::is_same_v<typename P::T, uint32_t>)
             // if constexpr(hasq<P>)
             // fftplvl1.execute_direct_torus32_q(res.data(), a.data(), P::q);
@@ -95,7 +102,11 @@ template <class P>
 inline void TwistFFTAdd(Polynomial<P> &res, PolynomialInFD<P> &a)
 {
     if constexpr (std::is_same_v<P, lvl1param> ||
-                  std::is_same_v<P, AHlvl1param>) {
+                  std::is_same_v<P, AHlvl1param>
+#ifdef ENABLE_AXELL
+                  || std::is_same_v<P, TFHEpp::lvlMparam>
+#endif
+    ) {
         if constexpr (std::is_same_v<typename P::T, uint32_t>)
             fftplvl1.execute_direct_torus32_add(res.data(), a.data());
         else if constexpr (std::is_same_v<typename P::T, uint64_t>)
@@ -134,7 +145,11 @@ inline void TwistINTT(PolynomialNTT<P> &res, const Polynomial<P> &a)
     // AHlvl1param shares the same polynomial ring as lvl1param (same nbit/n),
     // so it uses the lvl1 NTT tables regardless of its Torus type.
     if constexpr (std::is_same_v<P, lvl1param> ||
-                  std::is_same_v<P, AHlvl1param>)
+                  std::is_same_v<P, AHlvl1param>
+#ifdef ENABLE_AXELL
+                  || std::is_same_v<P, TFHEpp::lvlMparam>
+#endif
+    )
 #ifdef USE_HEXL
     {
         std::array<uint64_t, lvl1param::n> temp;
@@ -158,8 +173,11 @@ template <class P>
 inline void TwistIFFT(PolynomialInFD<P> &res, const Polynomial<P> &a)
 {
     if constexpr (std::is_same_v<P, lvl1param> ||
-                  std::is_same_v<P, TFHEpp::lvlMparam> ||
-                  std::is_same_v<P, AHlvl1param>) {
+                  std::is_same_v<P, AHlvl1param>
+#ifdef ENABLE_AXELL
+                  || std::is_same_v<P, TFHEpp::lvlMparam>
+#endif
+    ) {
         if constexpr (std::is_same_v<typename P::T, uint32_t>)
             fftplvl1.execute_reverse_torus32(res.data(), a.data());
         if constexpr (std::is_same_v<typename P::T, uint64_t>)
@@ -184,7 +202,11 @@ template <class P>
 inline void TwistIFFTUInt(PolynomialInFD<P> &res, const Polynomial<P> &a)
 {
     if constexpr (std::is_same_v<P, lvl1param> ||
-                  std::is_same_v<P, AHlvl1param>) {
+                  std::is_same_v<P, AHlvl1param>
+#ifdef ENABLE_AXELL
+                  || std::is_same_v<P, TFHEpp::lvlMparam>
+#endif
+    ) {
         if constexpr (std::is_same_v<typename P::T, uint32_t>)
             fftplvl1.execute_reverse_uint(res.data(), a.data());
         // if constexpr (std::is_same_v<typename P::T, uint64_t>)

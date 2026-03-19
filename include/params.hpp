@@ -30,7 +30,9 @@ enum class ErrorDistribution { ModularGaussian, CenteredBinomial };
 #include "params/128bit.hpp"
 #endif
 
+#ifdef ENABLE_AXELL
 #include "./axell/mpparam.hpp"
+#endif
 #ifndef USE_DIFFERENT_BR_PARAM
 using cblvl2param = lvl2param;
 #endif
@@ -235,6 +237,7 @@ using relinKey = std::array<TRLWE<P>, P::l * P::l̅>;
 template <class P>
 using relinKeyFFT = aligned_array<TRLWEInFD<P>, P::l * P::l̅>;
 
+#ifdef ENABLE_AXELL
 #define TFHEPP_EXPLICIT_INSTANTIATION_TLWE(fun) \
     fun(lvl0param);                             \
     fun(lvlhalfparam);                          \
@@ -245,6 +248,16 @@ using relinKeyFFT = aligned_array<TRLWEInFD<P>, P::l * P::l̅>;
     fun(lvl1param);                              \
     fun(lvl2param);                              \
     fun(lvlMparam);
+#else
+#define TFHEPP_EXPLICIT_INSTANTIATION_TLWE(fun) \
+    fun(lvl0param);                             \
+    fun(lvlhalfparam);                          \
+    fun(lvl1param);                             \
+    fun(lvl2param);
+#define TFHEPP_EXPLICIT_INSTANTIATION_TRLWE(fun) \
+    fun(lvl1param);                              \
+    fun(lvl2param);
+#endif
 #ifdef USE_DIFFERENT_AH_PARAM
 #define TFHEPP_EXPLICIT_INSTANTIATION_ANNIHILATE(fun) \
     fun(AHlvl1param);                                 \
@@ -256,18 +269,37 @@ using relinKeyFFT = aligned_array<TRLWEInFD<P>, P::l * P::l̅>;
     fun(AHlvl2param);
 #endif
 #ifdef USE_DIFFERENT_BR_PARAM
+#ifdef ENABLE_AXELL
 #define TFHEPP_EXPLICIT_INSTANTIATION_BLIND_ROTATE(fun) \
     fun(lvl01param);                                    \
     fun(lvl02param);                                    \
     fun(lvlh2param);                                    \
+    fun(lvl0Mparam);                                    \
     fun(cblvl02param);                                  \
     fun(cblvlh2param);
 #else
 #define TFHEPP_EXPLICIT_INSTANTIATION_BLIND_ROTATE(fun) \
     fun(lvl01param);                                    \
     fun(lvl02param);                                    \
+    fun(lvlh2param);                                    \
+    fun(cblvl02param);                                  \
+    fun(cblvlh2param);
+#endif
+#else
+#ifdef ENABLE_AXELL
+#define TFHEPP_EXPLICIT_INSTANTIATION_BLIND_ROTATE(fun) \
+    fun(lvl01param);                                    \
+    fun(lvl02param);                                    \
+    fun(lvlh2param);                                    \
+    fun(lvl0Mparam);
+#else
+#define TFHEPP_EXPLICIT_INSTANTIATION_BLIND_ROTATE(fun) \
+    fun(lvl01param);                                    \
+    fun(lvl02param);                                    \
     fun(lvlh2param);
 #endif
+#endif
+#ifdef ENABLE_AXELL
 #define TFHEPP_EXPLICIT_INSTANTIATION_KEY_SWITCH_TO_TLWE(fun) \
     fun(lvl10param);                                          \
     fun(lvl11param);                                          \
@@ -275,6 +307,14 @@ using relinKeyFFT = aligned_array<TRLWEInFD<P>, P::l * P::l̅>;
     fun(lvl21param);                                          \
     fun(lvl22param);                                          \
     fun(lvlM0param);
+#else
+#define TFHEPP_EXPLICIT_INSTANTIATION_KEY_SWITCH_TO_TLWE(fun) \
+    fun(lvl10param);                                          \
+    fun(lvl11param);                                          \
+    fun(lvl20param);                                          \
+    fun(lvl21param);                                          \
+    fun(lvl22param);
+#endif
 #define TFHEPP_EXPLICIT_INSTANTIATION_KEY_SWITCH_TO_TRLWE(fun) \
     fun(lvl11param);                                           \
     fun(lvl21param);                                           \

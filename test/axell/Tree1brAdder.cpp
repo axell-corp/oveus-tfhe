@@ -15,6 +15,7 @@ int main()
     TFHEpp::SecretKey* sk = new TFHEpp::SecretKey();
     TFHEpp::EvalKey ek;
     ek.emplacebkfft<TFHEpp::lvl01param>(*sk);
+    ek.emplacebkfft<TFHEpp::lvl0Mparam>(*sk);
     ek.emplaceiksk<TFHEpp::lvl10param>(*sk);
     std::vector<std::array<uint8_t,6>> pin(num_test);
     std::vector<std::array<uint8_t,2>> pres(num_test);

@@ -88,6 +88,8 @@ struct lvlMparam {
     static constexpr std::uint32_t Bgₐbit = Bgbit;
     static constexpr std::uint32_t Bgₐ = 1 << Bgₐbit;
     static constexpr std::uint32_t Bg = 1 << Bgbit;
+    static constexpr ErrorDistribution errordist =
+        ErrorDistribution::ModularGaussian;
     static const inline double α = std::pow(2.0, -25);
     using T = uint32_t;
     // static constexpr T μ = 0x15555555;
@@ -98,6 +100,10 @@ struct lvlMparam {
     static constexpr double Δ =
         static_cast<double>(1ULL << std::numeric_limits<T>::digits) /
         plain_modulus;
+    static constexpr std::uint32_t l̅ = 1;
+    static constexpr std::uint32_t l̅ₐ = l̅;
+    static constexpr std::uint32_t B̅gbit = std::numeric_limits<T>::digits;
+    static constexpr std::uint32_t B̅gₐbit = B̅gbit;
 };
 #endif
 
@@ -112,4 +118,5 @@ struct lvlM0param {
 struct lvl0Mparam {
     using domainP = lvl0param;
     using targetP = lvlMparam;
+    static constexpr uint32_t Addends = 1;
 };

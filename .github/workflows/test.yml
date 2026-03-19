@@ -19,17 +19,16 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
       with:
-        file: Dockerfile
-        tags: oveus-tfhe-2204
-        push: false
-        load: true
-        cache-from: type=gha,scope=buildx-${{ github.workflow }}-${{ github.job }}
-        cache-to: type=gha,mode=max,scope=buildx-${{ github.workflow }}-${{ github.job }}
-
-    - uses: addnab/docker-run-action@v3
-      with:
-        image: oveus-tfhe-2204
-        run: /TFHEpp/build/test/test.sh 
+        submodules: recursive
+    - name: build
+      run: |
+        cmake . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_TEST=ON -DENABLE_AXELL=ON
+        cd build
+        ninja
+    - name: test
+      run: |
+        cd build
+        test/test.sh
   ubuntu-2404:
     name: ubuntu-2404
     runs-on: Ubuntu-latest
@@ -47,7 +46,7 @@ jobs:
         submodules: recursive
     - name: build
       run: |
-        cmake . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_TEST=ON
+        cmake . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_TEST=ON -DENABLE_AXELL=ON
         cd build
         ninja
     - name: test
@@ -64,14 +63,14 @@ jobs:
       run: |
         apt-get update
         apt-get upgrade -y
-        apt-get install -y git build-essential g++ libomp-dev cmake git ninja-build clang-20 lld-20 libgoogle-perftools-dev
+        apt-get install -y git build-essential g++ libomp-dev cmake git ninja-build clang-18 lld-18 libgoogle-perftools-dev
     - name: Checkout
       uses: actions/checkout@v4
       with:
         submodules: recursive
     - name: build
       run: |
-        cmake . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++-18 -DCMAKE_C_COMPILER=clang-18 -DENABLE_TEST=ON
+        cmake . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++-18 -DCMAKE_C_COMPILER=clang-18 -DENABLE_TEST=ON -DENABLE_AXELL=ON
         cd build
         ninja
     - name: test

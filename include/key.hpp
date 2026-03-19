@@ -20,7 +20,17 @@ struct lweKey {
     std::tuple<Key<lvl0param>, Key<lvlhalfparam>, Key<lvl1param>,
                Key<lvl2param>, Key<lvl3param>>
         keys;
+    Key<lvl0param> &lvl0;
+    Key<lvlhalfparam> &lvlhalf;
+    Key<lvl1param> &lvl1;
+    Key<lvl2param> &lvl2;
+    Key<lvl3param> &lvl3;
     lweKey()
+        : lvl0(std::get<Key<lvl0param>>(keys)),
+          lvlhalf(std::get<Key<lvlhalfparam>>(keys)),
+          lvl1(std::get<Key<lvl1param>>(keys)),
+          lvl2(std::get<Key<lvl2param>>(keys)),
+          lvl3(std::get<Key<lvl3param>>(keys))
     {
         std::uniform_int_distribution<int32_t> lvl0gen(
             lvl0param::key_value_min, lvl0param::key_value_max);
@@ -44,10 +54,43 @@ struct lweKey {
                 std::get<Key<lvl1param>>(keys)[i];
 #endif
     }
+    lweKey(const lweKey &other)
+        : keys(other.keys),
+          lvl0(std::get<Key<lvl0param>>(keys)),
+          lvlhalf(std::get<Key<lvlhalfparam>>(keys)),
+          lvl1(std::get<Key<lvl1param>>(keys)),
+          lvl2(std::get<Key<lvl2param>>(keys)),
+          lvl3(std::get<Key<lvl3param>>(keys))
+    {
+    }
+    lweKey(lweKey &&other) noexcept
+        : keys(std::move(other.keys)),
+          lvl0(std::get<Key<lvl0param>>(keys)),
+          lvlhalf(std::get<Key<lvlhalfparam>>(keys)),
+          lvl1(std::get<Key<lvl1param>>(keys)),
+          lvl2(std::get<Key<lvl2param>>(keys)),
+          lvl3(std::get<Key<lvl3param>>(keys))
+    {
+    }
+    lweKey &operator=(const lweKey &other)
+    {
+        keys = other.keys;
+        return *this;
+    }
+    lweKey &operator=(lweKey &&other) noexcept
+    {
+        keys = std::move(other.keys);
+        return *this;
+    }
     template <class P>
     Key<P> get() const
     {
-        return std::get<Key<P>>(keys);
+#ifdef ENABLE_AXELL
+        if constexpr (std::is_same_v<P, lvlMparam>)
+            return Key<P>(std::get<Key<lvl1param>>(keys));
+        else
+#endif
+            return std::get<Key<P>>(keys);
     }
 };
 

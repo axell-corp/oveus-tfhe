@@ -4,7 +4,24 @@ file(COPY test.sh DESTINATION ${CMAKE_CURRENT_BINARY_DIR} FILE_PERMISSIONS OWNER
 file(COPY show_info.sh DESTINATION ${CMAKE_CURRENT_BINARY_DIR} FILE_PERMISSIONS OWNER_READ OWNER_EXECUTE)
 file(COPY benchmark_docker.sh DESTINATION ${CMAKE_CURRENT_BINARY_DIR} FILE_PERMISSIONS OWNER_READ OWNER_EXECUTE)
 
+set(core_test_sources
+    INTorus.cpp
+    annihilatecircuitbootstrapping.cpp
+    circuitbootstrapping.cpp
+    circuitbootstrappingsub.cpp
+    gatebootstrappingntt.cpp
+    gatebootstrappingtlwe2tlwe.cpp
+    iks.cpp
+    invcircuitbootstrapping.cpp
+    polymul.cpp
+    trgswenc.cpp)
+
+set(enabled_test_sources ${core_test_sources})
+
 foreach(test_source ${test_sources})
+    if(NOT test_source IN_LIST enabled_test_sources)
+        continue()
+    endif()
     string( REPLACE ".cpp" "" test_name ${test_source} )
     add_executable(${test_name} ${test_source})
     if(USE_PERF)
@@ -22,4 +39,6 @@ if(gmp)
     target_link_libraries(INTorus gmp)
 endif()
 
-add_subdirectory(axell)
+if(ENABLE_AXELL)
+    add_subdirectory(axell)
+endif()

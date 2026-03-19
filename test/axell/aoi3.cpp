@@ -17,6 +17,7 @@ int main()
     SecretKey* sk = new SecretKey();
     TFHEpp::EvalKey ek;
     ek.emplacebkfft<TFHEpp::lvl01param>(*sk);
+    ek.emplacebkfft<TFHEpp::lvl0Mparam>(*sk);
     ek.emplaceiksk<TFHEpp::lvl10param>(*sk);
     vector<uint8_t> pa(num_test);
     vector<uint8_t> pb(num_test);
@@ -50,7 +51,7 @@ int main()
     start = chrono::system_clock::now();
 
     for (int test = 0; test < num_test; test++) {
-        HomAOI3(cres[test], ca[test], cb[test], cc[test], ek);
+        HomAOI3<lvl1param>(cres[test], ca[test], cb[test], cc[test], ek);
     }
 
     end = chrono::system_clock::now();

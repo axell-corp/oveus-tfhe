@@ -15,6 +15,7 @@ int main()
     TFHEpp::SecretKey* sk = new TFHEpp::SecretKey();
     TFHEpp::EvalKey ek;
     ek.emplacebkfft<TFHEpp::lvl01param>(*sk);
+    ek.emplacebkfft<TFHEpp::lvl0Mparam>(*sk);
     ek.emplaceiksk<TFHEpp::lvl10param>(*sk);
     std::vector<uint8_t> pa(num_test);
     std::vector<uint8_t> pb(num_test);

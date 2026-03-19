@@ -146,6 +146,7 @@ void test(const size_t num_test, F func, Fc func_tfhe,
         std::unique_ptr<TFHEpp::EvalKey> ek_uptr(new TFHEpp::EvalKey());
         TFHEpp::EvalKey* const ek = ek_uptr.get();
         ek->emplacebkfft<TFHEpp::lvl01param>(*sk);
+        ek->emplacebkfft<TFHEpp::lvl0Mparam>(*sk);
         ek->emplaceiksk<TFHEpp::lvl10param>(*sk);
 
         size_t ans_idx;
@@ -268,6 +269,7 @@ void test_mul(const size_t num_test)
         std::unique_ptr<TFHEpp::EvalKey> ek_uptr(new TFHEpp::EvalKey());
         TFHEpp::EvalKey* const ek = ek_uptr.get();
         ek->emplacebkfft<TFHEpp::lvl01param>(*sk);
+        ek->emplacebkfft<TFHEpp::lvl0Mparam>(*sk);
         ek->emplaceiksk<TFHEpp::lvl10param>(*sk);
 
         TFHEpp::tfhe_uintN_t<in_bits, TP> cx(x[i], sk, ek), cx2, cy2;
@@ -357,6 +359,7 @@ void test_div(const size_t num_test, F func, Fc func_tfhe)
         std::unique_ptr<TFHEpp::EvalKey> ek_uptr(new TFHEpp::EvalKey());
         TFHEpp::EvalKey* const ek = ek_uptr.get();
         ek->emplacebkfft<TFHEpp::lvl01param>(*sk);
+        ek->emplacebkfft<TFHEpp::lvl0Mparam>(*sk);
         ek->emplaceiksk<TFHEpp::lvl10param>(*sk);
 
         Tc cx(x[i], sk, ek), cq(0, sk, ek), cr(0, sk, ek), cx2, cy2;
@@ -480,6 +483,7 @@ void test_unary_operator(const size_t num_test, F func)
         std::unique_ptr<TFHEpp::EvalKey> ek_uptr(new TFHEpp::EvalKey());
         TFHEpp::EvalKey* const ek = ek_uptr.get();
         ek->emplacebkfft<TFHEpp::lvl01param>(*sk);
+        ek->emplacebkfft<TFHEpp::lvl0Mparam>(*sk);
         ek->emplaceiksk<TFHEpp::lvl10param>(*sk);
 
         Tcin cx(x[i], sk, ek);
@@ -550,6 +554,7 @@ void test_comparison(const size_t num_test, F func)
         std::unique_ptr<TFHEpp::EvalKey> ek_uptr(new TFHEpp::EvalKey());
         TFHEpp::EvalKey* const ek = ek_uptr.get();
         ek->emplacebkfft<TFHEpp::lvl01param>(*sk);
+        ek->emplacebkfft<TFHEpp::lvl0Mparam>(*sk);
         ek->emplaceiksk<TFHEpp::lvl10param>(*sk);
 
         TFHEpp::tfhe_uintN_t<left_bits, TP> cx(x[i], sk, ek), cx2;

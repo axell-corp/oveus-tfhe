@@ -1,4 +1,4 @@
-#include <bits/stdint-uintn.h>
+#ifdef ENABLE_LSHTEST
 #include <gmp.h>
 #include <gmpxx.h>
 #endif

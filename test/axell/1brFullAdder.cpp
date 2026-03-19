@@ -18,6 +18,7 @@ int main()
     SecretKey* sk = new SecretKey();
     TFHEpp::EvalKey ek;
     ek.emplacebkfft<TFHEpp::lvl01param>(*sk);
+    ek.emplacebkfft<TFHEpp::lvl0Mparam>(*sk);
     ek.emplaceiksk<TFHEpp::lvl10param>(*sk);
     vector<uint8_t> pa(num_test);
     vector<uint8_t> pb(num_test);
