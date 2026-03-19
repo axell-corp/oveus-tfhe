@@ -16,4 +16,6 @@ endif()
 
 set(SPQLIOS_HEADERS fft_processor_spqlios.h x86.h)
 
+add_library(spqlios STATIC ${SRCS_FMA} ${SPQLIOS_HEADERS})
+
 target_include_directories(spqlios PUBLIC ${PROJECT_SOURCE_DIR}/include)

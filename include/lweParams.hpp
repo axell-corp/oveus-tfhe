@@ -130,7 +130,9 @@ struct portablelvl20param {
     double α;     // key noise
 
     portablelvl20param()
-        : t(lvl20param::t), basebit(lvl20param::basebit), α(lvl20param::α)
+        : t(lvl20param::t),
+          basebit(lvl20param::basebit),
+          α(lvl20param::targetP::α)
     {
     }
 
@@ -151,10 +153,7 @@ struct portablelvl21param {
     std::uint32_t
         basebit;  // how many bit should be encrypted in keyswitching key
 
-    portablelvl21param()
-        : t(lvl21param::t), basebit(lvl21param::basebit), α(lvl21param::α)
-    {
-    }
+    portablelvl21param() : t(lvl21param::t), basebit(lvl21param::basebit) {}
 
     template <class Archive>
     void serialize(Archive& archive)
@@ -174,10 +173,7 @@ struct portablelvl22param {
         basebit;  // how many bit should be encrypted in keyswitching key
     // double α;     // key noise
 
-    portablelvl22param()
-        : t(lvl22param::t), basebit(lvl22param::basebit), α(lvl22param::α)
-    {
-    }
+    portablelvl22param() : t(lvl22param::t), basebit(lvl22param::basebit) {}
 
     bool operator==(const portablelvl22param& in) const
     {

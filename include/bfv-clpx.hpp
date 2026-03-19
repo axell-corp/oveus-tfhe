@@ -197,15 +197,6 @@ void TLWES2CLPXIKS(TRLWE<typename bkP::targetP> &res,
     TLWE2TRLWEPacking<typename bkP::targetP>(res, temp1, ahk);
 }
 
-template <class P>
-inline void GateBootstrappingTLWE2TLWEFFT(
-    TLWE<typename P::targetP> &res, const TLWE<typename P::domainP> &tlwe,
-    const BootstrappingKeyFFT<P> &bkfft,
-    const Polynomial<typename P::targetP> &testvector)
-{
-    GateBootstrappingTLWE2TLWE<P>(res, tlwe, bkfft, testvector);
-}
-
 template <class P, uint32_t num_out>
 inline void GateBootstrappingTLWE2TLWEFFTManyLut(
     std::array<TLWE<typename P::targetP>, num_out> &res,

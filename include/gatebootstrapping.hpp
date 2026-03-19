@@ -274,32 +274,30 @@ void GateBootstrappingTLWE2TLWEFFTfunc(
     const BootstrappingKeyFFT<P> &bkfft,
     const TRLWE<typename P::targetP> &testvector);
 
+template <class P>
+inline void GateBootstrappingTLWE2TLWEFFT(
+    TLWE<typename P::targetP> &res, const TLWE<typename P::domainP> &tlwe,
+    const BootstrappingKeyFFT<P> &bkfft,
+    const Polynomial<typename P::targetP> &testvector)
+{
+    GateBootstrappingTLWE2TLWE<P>(res, tlwe, bkfft, testvector);
+}
+
+template <class P>
+inline void GateBootstrappingTLWE2TLWEFFT(
+    TLWE<typename P::targetP> &res, const TLWE<typename P::domainP> &tlwe,
+    const BootstrappingKeyFFT<P> &bkfft,
+    const TRLWE<typename P::targetP> &testvector)
+{
+    GateBootstrappingTLWE2TLWEFFTfunc<P>(res, tlwe, bkfft, testvector);
+}
+
 template <class P, typename P::T μ>
 constexpr Polynomial<P> μpolygen()
 {
     Polynomial<P> poly;
     for (typename P::T &p : poly) p = μ;
     return poly;
-}
-
-template <typename lvl1param::T μ = lvl1param::μ>
-void GateBootstrapping(TLWE<lvl0param> &res, const TLWE<lvl0param> &tlwe,
-                       const EvalKey &ek)
-{
-    TLWE<lvl1param> tlwelvl1;
-    GateBootstrappingTLWE2TLWEFFT<lvl01param>(tlwelvl1, tlwe, *ek.bkfftlvl01,
-                                              μpolygen<lvl1param, μ>());
-    IdentityKeySwitch<lvl10param>(res, tlwelvl1, *ek.iksklvl10);
-}
-
-template <typename lvl1param::T μ = lvl1param::μ>
-void GateBootstrapping(TLWE<lvl1param> &res, const TLWE<lvl1param> &tlwe,
-                       const EvalKey &ek)
-{
-    alignas(64) TLWE<typename bkP::targetP> tlwelvl1;
-    GateBootstrappingTLWE2TLWE<bkP>(tlwelvl1, tlwe, ek.getbkfft<bkP>(),
-                                    μpolygen<typename bkP::targetP, μ>());
-    IdentityKeySwitch<iksP>(res, tlwelvl1, ek.getiksk<iksP>());
 }
 
 template <class iksP, class bkP, typename bkP::targetP::T μ>
@@ -314,7 +312,18 @@ void GateBootstrapping(TLWE<typename bkP::targetP> &res,
 }
 
 template <class bkP, typename bkP::targetP::T μ, class iksP>
-void GateBootstrappingNTT(TLWE<typename iksP::tagetP> &res,
+void GateBootstrapping(TLWE<typename iksP::targetP> &res,
+                       const TLWE<typename bkP::domainP> &tlwe,
+                       const EvalKey &ek)
+{
+    alignas(64) TLWE<typename bkP::targetP> tlwelvl1;
+    GateBootstrappingTLWE2TLWE<bkP>(tlwelvl1, tlwe, ek.getbkfft<bkP>(),
+                                    μpolygen<typename bkP::targetP, μ>());
+    IdentityKeySwitch<iksP>(res, tlwelvl1, ek.getiksk<iksP>());
+}
+
+template <class bkP, typename bkP::targetP::T μ, class iksP>
+void GateBootstrappingNTT(TLWE<typename iksP::targetP> &res,
                           const TLWE<typename bkP::domainP> &tlwe,
                           const EvalKey &ek)
 {

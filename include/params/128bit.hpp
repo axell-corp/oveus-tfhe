@@ -4,28 +4,18 @@
 #include <cstdint>
 
 struct lvl0param {
-    static constexpr std::uint32_t n = 635;             // dimension
-    static const inline double α = std::pow(2.0, -15);  // fresh noise
-    using T = uint32_t;                                 // Torus representation
-    static constexpr T μ = 1U << (std::numeric_limits<T>::digits - 3);
-    static constexpr uint32_t plain_modulus = 2;
-    static constexpr double Δ =
-        static_cast<double>(1ULL << std::numeric_limits<T>::digits) /
-        plain_modulus;
-};
-
-struct lvl1param {
-    static constexpr std::uint32_t nbit =
-        10;  // dimension must be a power of 2 for ease of polynomial
-             // multiplication.
-    static constexpr std::uint32_t n = 1 << nbit;  // dimension
-    static constexpr std::uint32_t l = 3;
-    static constexpr std::uint32_t Bgbit = 6;
-    static constexpr std::uint32_t Bg = 1 << Bgbit;
-    static const inline double α = std::pow(2.0, -25);  // fresh noise
-    using T = uint32_t;                                 // Torus representation
-    static constexpr T μ = 1U << 29;
-    static constexpr uint32_t plain_modulus = 2;
+    static constexpr int32_t key_value_max = 1;
+    static constexpr int32_t key_value_min = 0;
+    static constexpr int32_t key_value_diff = key_value_max - key_value_min;
+    static constexpr std::uint32_t n = 636;  // dimension
+    static constexpr std::uint32_t k = 1;
+    static constexpr ErrorDistribution errordist =
+        ErrorDistribution::ModularGaussian;
+    static const inline double α = 0.000'092'511'997'467'675'6;  // fresh noise
+    using T = uint16_t;  // Torus representation
+    static constexpr std::make_signed_t<T> μ =
+        1LL << (std::numeric_limits<T>::digits - 3);
+    static constexpr uint32_t plain_modulus = 8;
     static constexpr double Δ =
         static_cast<double>(1ULL << std::numeric_limits<T>::digits) /
         plain_modulus;

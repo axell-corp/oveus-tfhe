@@ -139,8 +139,10 @@ void RunTest()
 
     if constexpr (std::is_same_v<P, lvl0param>)
         cout << "------ Test of lvl0param ------" << endl;
+#ifdef ENABLE_AXELL
     else if constexpr (std::is_same_v<P, lvlMparam>)
         cout << "------ Test of lvlMparam ------" << endl;
+#endif
     else if constexpr (std::is_same_v<P, lvl1param>)
         cout << "------ Test of lvl1param ------" << endl;
 

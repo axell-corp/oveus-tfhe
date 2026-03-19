@@ -23,8 +23,7 @@ int main()
     TFHEpp::EvalKey ek;
     ek.emplaceiksk<iksP>(*sk);
     ek.emplacebkfft<bkP>(*sk);
-    ek.emplaceprivksk<privksP, 1>(*sk);
-    ek.emplaceprivksk<privksP, 0>(*sk);
+    ek.emplaceprivksk4cb<privksP>(*sk);
 
     std::vector<std::array<uint8_t, privksP::targetP::n>> pa(num_test);
     std::vector<std::array<typename privksP::targetP::T, privksP::targetP::n>>
@@ -43,8 +42,8 @@ int main()
         num_test);
 
     for (int i = 0; i < num_test; i++)
-        ca[i] = TFHEpp::trlweSymEncrypt<typename privksP::targetP>(
-            pmu[i], privksP::targetP::α,
+        TFHEpp::trlweSymEncrypt<typename privksP::targetP>(
+            ca[i], pmu[i], privksP::targetP::α,
             sk->key.get<typename privksP::targetP>());
     cones = TFHEpp::bootsSymEncrypt(pones, *sk);
 
@@ -54,18 +53,18 @@ int main()
 #endif
     start = std::chrono::system_clock::now();
     for (int test = 0; test < num_test; test++) {
-        TFHEpp::CircuitBootstrappingFFT<iksP, bkP, privksP>(bootedTGSW[test],
-                                                            cones[test], ek);
+        TFHEpp::CircuitBootstrapping<iksP, bkP, privksP>(bootedTGSW[test],
+                                                         cones[test], ek);
     }
     end = std::chrono::system_clock::now();
 #ifdef USE_PERF
     ProfilerStop();
 #endif
     for (int test = 0; test < num_test; test++) {
-        TFHEpp::trgswfftExternalProduct<typename privksP::targetP>(
+        TFHEpp::ExternalProduct<typename privksP::targetP>(
             ca[test], ca[test], bootedTGSW[test]);
         pres = TFHEpp::trlweSymDecrypt<typename privksP::targetP>(ca[test],
-                                                                  sk->key.lvl1);
+            sk->key.get<typename privksP::targetP>());
         for (int i = 0; i < privksP::targetP::n; i++)
             assert(pres[i] == pa[test][i]);
     }
