@@ -91,9 +91,12 @@ void FFT_Processor_Spqlios::execute_reverse_int(double *res, const int32_t *a) {
     ifft(tables_reverse, res);
 }
 
+extern "C" void ifft_from_i32(const void *tables, double *out, const int32_t *in_re, const int32_t *in_im);
+
 void FFT_Processor_Spqlios::execute_reverse_torus32(double *res, const uint32_t *a) {
-    int32_t *aa = (int32_t *) a;
-    execute_reverse_int(res, aa);
+    // Fused: convert int32→double + inverse twist + IFFT in one pipeline
+    const int32_t *aa = (const int32_t *)a;
+    ifft_from_i32(tables_reverse, res, aa, aa + Ns2);
 }
 
 void FFT_Processor_Spqlios::execute_reverse_torus64(double* res, const uint64_t* a) {

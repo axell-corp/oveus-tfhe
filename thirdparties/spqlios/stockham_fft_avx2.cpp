@@ -660,6 +660,137 @@ void ifft(const void *tables, double *c) {
     stockham_fft_inverse(ns4, twist_tw, bf_tw, re, im, t->scratch, t->scratch + ns4);
 }
 
+// Fused IFFT from int32_t input: converts int32→double and does IFFT in
+// one fewer pass by fusing the conversion into the first butterfly+twist pass.
+void ifft_from_i32(const void *tables, double *out, const int32_t *in_re, const int32_t *in_im) {
+    auto *t = (STOCKHAM_R4_PRECOMP *)tables;
+    int32_t ns4 = t->ns4;
+    double *dst_re = t->scratch;
+    double *dst_im = t->scratch + ns4;
+    const double *twist_tw = t->trig_inv;
+    const double *tw_cos = twist_tw;
+    const double *tw_sin = twist_tw + ns4;
+
+    int32_t q = ns4 / 4;
+    int32_t stride = q;
+
+    // Fused first pass: convert int32→double + inverse twist + radix-4 butterfly
+    for (int32_t p = 0; p < q; p += 4) {
+        // Load twist twiddles
+        __m256d tc0 = _mm256_loadu_pd(tw_cos + p);
+        __m256d ts0 = _mm256_loadu_pd(tw_sin + p);
+        __m256d tc1 = _mm256_loadu_pd(tw_cos + p + stride);
+        __m256d ts1 = _mm256_loadu_pd(tw_sin + p + stride);
+        __m256d tc2 = _mm256_loadu_pd(tw_cos + p + 2*stride);
+        __m256d ts2 = _mm256_loadu_pd(tw_sin + p + 2*stride);
+        __m256d tc3 = _mm256_loadu_pd(tw_cos + p + 3*stride);
+        __m256d ts3 = _mm256_loadu_pd(tw_sin + p + 3*stride);
+
+        // Convert int32→double and apply twist in one step
+        __m128i ia = _mm_loadu_si128((const __m128i*)(in_re + p));
+        __m256d raw_a_re = _mm256_cvtepi32_pd(ia);
+        ia = _mm_loadu_si128((const __m128i*)(in_im + p));
+        __m256d raw_a_im = _mm256_cvtepi32_pd(ia);
+        __m256d a_re, a_im;
+        cmul_split_avx2(raw_a_re, raw_a_im, tc0, ts0, a_re, a_im);
+
+        __m128i ib = _mm_loadu_si128((const __m128i*)(in_re + p + stride));
+        __m256d raw_b_re = _mm256_cvtepi32_pd(ib);
+        ib = _mm_loadu_si128((const __m128i*)(in_im + p + stride));
+        __m256d raw_b_im = _mm256_cvtepi32_pd(ib);
+        __m256d b_re, b_im;
+        cmul_split_avx2(raw_b_re, raw_b_im, tc1, ts1, b_re, b_im);
+
+        __m128i ic = _mm_loadu_si128((const __m128i*)(in_re + p + 2*stride));
+        __m256d raw_c_re = _mm256_cvtepi32_pd(ic);
+        ic = _mm_loadu_si128((const __m128i*)(in_im + p + 2*stride));
+        __m256d raw_c_im = _mm256_cvtepi32_pd(ic);
+        __m256d c_re, c_im;
+        cmul_split_avx2(raw_c_re, raw_c_im, tc2, ts2, c_re, c_im);
+
+        __m128i id = _mm_loadu_si128((const __m128i*)(in_re + p + 3*stride));
+        __m256d raw_d_re = _mm256_cvtepi32_pd(id);
+        id = _mm_loadu_si128((const __m128i*)(in_im + p + 3*stride));
+        __m256d raw_d_im = _mm256_cvtepi32_pd(id);
+        __m256d d_re, d_im;
+        cmul_split_avx2(raw_d_re, raw_d_im, tc3, ts3, d_re, d_im);
+
+        // Radix-4 inverse butterfly
+        __m256d neg = _mm256_set1_pd(-0.0);
+        __m256d apc_re = _mm256_add_pd(a_re, c_re);
+        __m256d apc_im = _mm256_add_pd(a_im, c_im);
+        __m256d amc_re = _mm256_sub_pd(a_re, c_re);
+        __m256d amc_im = _mm256_sub_pd(a_im, c_im);
+        __m256d bpd_re = _mm256_add_pd(b_re, d_re);
+        __m256d bpd_im = _mm256_add_pd(b_im, d_im);
+        __m256d bmd_re = _mm256_sub_pd(b_re, d_re);
+        __m256d bmd_im = _mm256_sub_pd(b_im, d_im);
+        __m256d jbmd_re = bmd_im;
+        __m256d jbmd_im = _mm256_xor_pd(bmd_re, neg);
+
+        _mm256_storeu_pd(dst_re + p, _mm256_add_pd(apc_re, bpd_re));
+        _mm256_storeu_pd(dst_im + p, _mm256_add_pd(apc_im, bpd_im));
+        _mm256_storeu_pd(dst_re + q + p, _mm256_sub_pd(amc_re, jbmd_re));
+        _mm256_storeu_pd(dst_im + q + p, _mm256_sub_pd(amc_im, jbmd_im));
+        _mm256_storeu_pd(dst_re + 2*q + p, _mm256_sub_pd(apc_re, bpd_re));
+        _mm256_storeu_pd(dst_im + 2*q + p, _mm256_sub_pd(apc_im, bpd_im));
+        _mm256_storeu_pd(dst_re + 3*q + p, _mm256_add_pd(amc_re, jbmd_re));
+        _mm256_storeu_pd(dst_im + 3*q + p, _mm256_add_pd(amc_im, jbmd_im));
+    }
+
+    // Remaining passes
+    double *cur_re = dst_re, *cur_im = dst_im;
+    dst_re = out; dst_im = out + ns4;
+    q /= 4;
+    int32_t s = 4;
+    const double *bf_tw = t->trig_inv + 2 * ns4 + 1 * 6; // skip first stage twiddles
+
+    while (q >= 1) {
+        if (q >= 4) {
+            stockham_r4_inv_pass(ns4, q, s, bf_tw, cur_re, cur_im, dst_re, dst_im);
+        } else {
+            // q=1 final pass (scalar gather, contiguous store)
+            for (int32_t j = 0; j < s; j++) {
+                double a_r = cur_re[j], a_i = cur_im[j];
+                double b_r = cur_re[j+s], b_i = cur_im[j+s];
+                double c_r = cur_re[j+2*s], c_i = cur_im[j+2*s];
+                double d_r = cur_re[j+3*s], d_i = cur_im[j+3*s];
+                double apc_r = a_r+c_r, apc_i = a_i+c_i;
+                double amc_r = a_r-c_r, amc_i = a_i-c_i;
+                double bpd_r = b_r+d_r, bpd_i = b_i+d_i;
+                double bmd_r = b_r-d_r, bmd_i = b_i-d_i;
+                double jbmd_r = bmd_i, jbmd_i = -bmd_r;
+                int32_t ob = 4*j;
+                dst_re[ob] = apc_r + bpd_r; dst_im[ob] = apc_i + bpd_i;
+                double o1_r = amc_r-jbmd_r, o1_i = amc_i-jbmd_i;
+                double o2_r = apc_r-bpd_r, o2_i = apc_i-bpd_i;
+                double o3_r = amc_r+jbmd_r, o3_i = amc_i+jbmd_i;
+                if (j != 0) {
+                    const double *twj = bf_tw + j*6;
+                    double t;
+                    t = o1_r*twj[0]-o1_i*twj[1]; o1_i = o1_i*twj[0]+o1_r*twj[1]; o1_r = t;
+                    t = o2_r*twj[2]-o2_i*twj[3]; o2_i = o2_i*twj[2]+o2_r*twj[3]; o2_r = t;
+                    t = o3_r*twj[4]-o3_i*twj[5]; o3_i = o3_i*twj[4]+o3_r*twj[5]; o3_r = t;
+                }
+                dst_re[ob+1] = o1_r; dst_im[ob+1] = o1_i;
+                dst_re[ob+2] = o2_r; dst_im[ob+2] = o2_i;
+                dst_re[ob+3] = o3_r; dst_im[ob+3] = o3_i;
+            }
+        }
+        bf_tw += s * 6;
+        double *tmp;
+        tmp = cur_re; cur_re = dst_re; dst_re = tmp;
+        tmp = cur_im; cur_im = dst_im; dst_im = tmp;
+        s *= 4; q /= 4;
+    }
+
+    // Copy to output if needed
+    if (cur_re != out) {
+        memcpy(out, cur_re, ns4 * sizeof(double));
+        memcpy(out + ns4, cur_im, ns4 * sizeof(double));
+    }
+}
+
 // Model functions (for debugging, same interface)
 void fft_model(const void *tables) {
     auto *t = (STOCKHAM_R4_PRECOMP *)tables;
