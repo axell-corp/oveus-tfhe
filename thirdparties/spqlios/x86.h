@@ -137,6 +137,27 @@ __m256i pack64to32(__m256i a, __m256i b)
 }
 
 
+// Convert f64→u32 and ADD to existing u32 values (for TwistFFTAdd)
+inline void convert_f64_add_u32(uint32_t* const res, const double* const src, const int32_t N) {
+#ifdef USE_AVX512
+    for (int32_t i = 0; i < N; i += 8) {
+        const __m512d vals = _mm512_loadu_pd(&src[i]);
+        const __m512i i64 = _mm512_cvtpd_epi64(vals);
+        const __m256i i32 = _mm512_cvtepi64_epi32(i64);
+        const __m256i prev = _mm256_loadu_si256((const __m256i*)&res[i]);
+        _mm256_storeu_si256((__m256i*)&res[i], _mm256_add_epi32(prev, i32));
+    }
+#else
+    for (int32_t i = 0; i < N; i += 8) {
+        const __m256i int64_vals1 = mm256_cvtpd_epi64(_mm256_loadu_pd(&src[i]));
+        const __m256i int64_vals2 = mm256_cvtpd_epi64(_mm256_loadu_pd(&src[i + 4]));
+        const __m256i packed32 = pack64to32(int64_vals1, int64_vals2);
+        const __m256i prev = _mm256_loadu_si256((const __m256i*)&res[i]);
+        _mm256_storeu_si256((__m256i*)&res[i], _mm256_add_epi32(prev, packed32));
+    }
+#endif
+}
+
 inline void convert_f64_to_u32(uint32_t* const res, const double* const real_inout_direct, const int32_t N) {
 #ifdef USE_AVX512
     for (int32_t i = 0; i < N; i += 8) {

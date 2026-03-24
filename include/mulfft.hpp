@@ -387,6 +387,67 @@ inline void FMAInFD(std::array<double, N> &res, const std::array<double, N> &a,
 #endif
 }
 
+// Fused FMA: multiply a single decpolyfft by multiple TRGSW rows and accumulate
+// into multiple result rows in one pass.  Loads `a` once from L1 and streams `b`
+// and `res`, reducing L1 pressure when k+1 is large (e.g. 4 for k=3).
+template <uint32_t N, int M, class ResArr, class BArr>
+inline void FMAInFD_Multi(ResArr &res, const std::array<double, N> &a,
+                          const BArr &b_row)
+{
+#if defined(__AVX2__) && !defined(__AVX512F__) && !defined(USE_INTERLEAVED_FORMAT)
+    const double *are = a.data(), *aim = a.data() + N / 2;
+    for (uint32_t i = 0; i < N / 2; i += 4) {
+        __m256d va_re = _mm256_load_pd(are + i);
+        __m256d va_im = _mm256_load_pd(aim + i);
+        for (int m = 0; m < M; m++) {
+            const double *bre = b_row[m].data(), *bim = b_row[m].data() + N / 2;
+            double *rre = res[m].data(), *rim = res[m].data() + N / 2;
+            __m256d vb_re = _mm256_load_pd(bre + i);
+            __m256d vb_im = _mm256_load_pd(bim + i);
+            __m256d vr_re = _mm256_load_pd(rre + i);
+            __m256d vr_im = _mm256_load_pd(rim + i);
+            vr_re = _mm256_fmadd_pd(va_re, vb_re, vr_re);
+            vr_re = _mm256_fnmadd_pd(va_im, vb_im, vr_re);
+            vr_im = _mm256_fmadd_pd(va_im, vb_re, vr_im);
+            vr_im = _mm256_fmadd_pd(va_re, vb_im, vr_im);
+            _mm256_store_pd(rre + i, vr_re);
+            _mm256_store_pd(rim + i, vr_im);
+        }
+    }
+#else
+    for (int m = 0; m < M; m++)
+        FMAInFD<N>(res[m], a, b_row[m]);
+#endif
+}
+
+template <uint32_t N, int M, class ResArr, class BArr>
+inline void MulInFD_Multi(ResArr &res, const std::array<double, N> &a,
+                          const BArr &b_row)
+{
+#if defined(__AVX2__) && !defined(__AVX512F__) && !defined(USE_INTERLEAVED_FORMAT)
+    const double *are = a.data(), *aim = a.data() + N / 2;
+    for (uint32_t i = 0; i < N / 2; i += 4) {
+        __m256d va_re = _mm256_load_pd(are + i);
+        __m256d va_im = _mm256_load_pd(aim + i);
+        for (int m = 0; m < M; m++) {
+            const double *bre = b_row[m].data(), *bim = b_row[m].data() + N / 2;
+            double *rre = res[m].data(), *rim = res[m].data() + N / 2;
+            __m256d vb_re = _mm256_load_pd(bre + i);
+            __m256d vb_im = _mm256_load_pd(bim + i);
+            __m256d vr_re = _mm256_mul_pd(va_re, vb_re);
+            vr_re = _mm256_fnmadd_pd(va_im, vb_im, vr_re);
+            __m256d vr_im = _mm256_mul_pd(va_im, vb_re);
+            vr_im = _mm256_fmadd_pd(va_re, vb_im, vr_im);
+            _mm256_store_pd(rre + i, vr_re);
+            _mm256_store_pd(rim + i, vr_im);
+        }
+    }
+#else
+    for (int m = 0; m < M; m++)
+        MulInFD<N>(res[m], a, b_row[m]);
+#endif
+}
+
 template <class P>
 inline void PolyMul(Polynomial<P> &res, const Polynomial<P> &a,
                     const Polynomial<P> &b)

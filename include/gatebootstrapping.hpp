@@ -66,6 +66,14 @@ void BlindRotate(TRLWE<typename P::targetP> &res,
     }
 #else
     for (int i = 0; i < P::domainP::k * P::domainP::n; i++) {
+        // Prefetch the next BK element (128KB ahead) to overlap memory
+        // latency with computation.  Spread prefetch hints across multiple
+        // cache lines at the start of the next TRGSW element.
+        if (i + 1 < P::domainP::k * P::domainP::n) {
+            const char *next_bk = reinterpret_cast<const char *>(&bkfft[i + 1]);
+            for (int p = 0; p < 8; p++)
+                __builtin_prefetch(next_bk + p * 4096, 0, 1);
+        }
         if (moded[i] == 0) continue;
         CMUXwithPolynomialMulByXaiMinusOne<P>(res, bkfft[i], moded[i]);
     }
@@ -120,6 +128,11 @@ void BlindRotate(TRLWE<typename P::targetP> &res,
              P::targetP::nbit + bitwidth)
                 << bitwidth;
         if (ā == 0) continue;
+        if (i + 1 < P::domainP::k * P::domainP::n) {
+            const char *next_bk = reinterpret_cast<const char *>(&bkfft[i + 1]);
+            for (int p = 0; p < 8; p++)
+                __builtin_prefetch(next_bk + p * 4096, 0, 1);
+        }
         CMUXwithPolynomialMulByXaiMinusOne<P>(res, bkfft[i], ā);
     }
 #endif

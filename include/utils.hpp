@@ -14,6 +14,10 @@
 #include <limits>
 #include <random>
 
+#ifdef __AVX2__
+#include <immintrin.h>
+#endif
+
 namespace TFHEpp {
 #if defined(USE_BLAKE3)
 static thread_local std::random_device trng;
@@ -229,14 +233,69 @@ inline void PolynomialMulByXaiMinusOne(Polynomial<P> &res,
                                        const Polynomial<P> &poly,
                                        const typename P::T a)
 {
-    if (a < P::n) {
-        for (int i = 0; i < a; i++) res[i] = -poly[i - a + P::n] - poly[i];
-        for (int i = a; i < P::n; i++) res[i] = poly[i - a] - poly[i];
+#if defined(__AVX2__)
+    if constexpr ((std::is_same_v<typename P::T, uint64_t> ||
+                   std::is_same_v<typename P::T, uint32_t>) && P::n >= 4) {
+        // Vectorized path: process 32 bytes (4 uint64 or 8 uint32) per iteration
+        // _mm256_sub_epi64 works for both since wrapping arithmetic is the same
+        constexpr int STEP = 32 / sizeof(typename P::T);
+        const typename P::T offset_val = (a < P::n) ? a : (a - P::n);
+        const bool negate_first = (a < P::n);
+        const int boundary = static_cast<int>(offset_val);
+        const typename P::T *src = poly.data();
+        typename P::T *dst = res.data();
+        const __m256i vzero = _mm256_setzero_si256();
+
+        // Use element-width-appropriate subtraction for correct borrow handling
+        auto vsub = [](__m256i a, __m256i b) {
+            if constexpr (sizeof(typename P::T) == 4)
+                return _mm256_sub_epi32(a, b);
+            else
+                return _mm256_sub_epi64(a, b);
+        };
+        auto do_neg_sub = [&](int &i, int &ri, int end) {
+            for (; i + STEP <= end; i += STEP, ri += STEP) {
+                __m256i vr = _mm256_loadu_si256((const __m256i*)(src + ri));
+                __m256i vp = _mm256_loadu_si256((const __m256i*)(src + i));
+                _mm256_storeu_si256((__m256i*)(dst + i),
+                    vsub(vsub(vzero, vr), vp));
+            }
+            for (; i < end; i++, ri++) dst[i] = -src[ri] - src[i];
+        };
+        auto do_sub = [&](int &i, int &ri, int end) {
+            for (; i + STEP <= end; i += STEP, ri += STEP) {
+                __m256i vr = _mm256_loadu_si256((const __m256i*)(src + ri));
+                __m256i vp = _mm256_loadu_si256((const __m256i*)(src + i));
+                _mm256_storeu_si256((__m256i*)(dst + i), vsub(vr, vp));
+            }
+            for (; i < end; i++, ri++) dst[i] = src[ri] - src[i];
+        };
+
+        int rot_idx = P::n - boundary;
+        int i = 0;
+        int n_int = static_cast<int>(P::n);
+        if (negate_first) {
+            do_neg_sub(i, rot_idx, boundary);
+            rot_idx = 0;
+            do_sub(i, rot_idx, n_int);
+        } else {
+            do_sub(i, rot_idx, boundary);
+            rot_idx = 0;
+            do_neg_sub(i, rot_idx, n_int);
+        }
     }
-    else {
-        const typename P::T aa = a - P::n;
-        for (int i = 0; i < aa; i++) res[i] = poly[i - aa + P::n] - poly[i];
-        for (int i = aa; i < P::n; i++) res[i] = -poly[i - aa] - poly[i];
+    else
+#endif
+    {
+        if (a < P::n) {
+            for (int i = 0; i < a; i++) res[i] = -poly[i - a + P::n] - poly[i];
+            for (int i = a; i < P::n; i++) res[i] = poly[i - a] - poly[i];
+        }
+        else {
+            const typename P::T aa = a - P::n;
+            for (int i = 0; i < aa; i++) res[i] = poly[i - aa + P::n] - poly[i];
+            for (int i = aa; i < P::n; i++) res[i] = -poly[i - aa] - poly[i];
+        }
     }
 }
 

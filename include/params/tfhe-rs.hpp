@@ -94,11 +94,12 @@ struct lvl1param {
         ErrorDistribution::ModularGaussian;
     // StandardDev from tfhe-rs DEFAULT_PARAMETERS glwe_noise_distribution
     static const inline double α = 9.315272083503367e-10;
-    using T = uint64_t;  // Torus representation
-    static constexpr std::make_signed_t<T> μ = 1ULL << 61;
+    using T = uint32_t;  // Torus representation (matches tfhe-rs 32-bit torus)
+    static constexpr std::make_signed_t<T> μ =
+        1U << (std::numeric_limits<T>::digits - 3);  // 1/8 = 1<<29
     static constexpr uint32_t plain_modulus = 2;
     static constexpr double Δ =
-        2 * static_cast<double>(1ULL << (std::numeric_limits<T>::digits - 1)) /
+        static_cast<double>(1ULL << std::numeric_limits<T>::digits) /
         plain_modulus;
     // Double Decomposition (bivariate representation) parameters
     // For now, set to trivial values (no actual second decomposition)

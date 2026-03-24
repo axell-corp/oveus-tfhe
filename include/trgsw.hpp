@@ -155,15 +155,62 @@ inline void DecompositionImpl(DecPolyType &decpoly, const Polynomial<P> &poly)
     constexpr typename P::T halfBg =
         static_cast<typename P::T>(1) << (D::Bgbit - 1);
 
-    for (int n = 0; n < P::n; n++) {
-        typename P::T a = poly[n] + offset + roundoffset;
+    // AVX2 fast path for uint32_t with l̅=1: process 8 elements per register
+#if defined(__AVX2__) && !defined(USE_INTERLEAVED_FORMAT)
+    if constexpr (std::is_same_v<typename P::T, uint32_t> && D::l̅ == 1 && P::n >= 8) {
+        const __m256i voffset = _mm256_set1_epi32(
+            static_cast<int32_t>(offset + roundoffset));
+        const __m256i vmask = _mm256_set1_epi32(static_cast<int32_t>(maskBg));
+        const __m256i vhalf = _mm256_set1_epi32(static_cast<int32_t>(halfBg));
+        for (int n = 0; n < P::n; n += 8) {
+            __m256i va = _mm256_add_epi32(
+                _mm256_loadu_si256((const __m256i*)(poly.data() + n)),
+                voffset);
+            for (int i = 0; i < D::l; i++) {
+                constexpr int base_shift = std::numeric_limits<typename P::T>::digits;
+                const int shift = base_shift - (i + 1) * D::Bgbit;
+                __m256i vd = _mm256_sub_epi32(
+                    _mm256_and_si256(_mm256_srli_epi32(va, shift), vmask),
+                    vhalf);
+                _mm256_storeu_si256((__m256i*)(decpoly[i].data() + n), vd);
+            }
+        }
+    }
+    // AVX2 fast path for uint64_t with l̅=1
+    else if constexpr (std::is_same_v<typename P::T, uint64_t> && D::l̅ == 1 && P::n >= 4) {
+        const __m256i voffset = _mm256_set1_epi64x(
+            static_cast<int64_t>(offset + roundoffset));
+        const __m256i vmask = _mm256_set1_epi64x(static_cast<int64_t>(maskBg));
+        const __m256i vhalf = _mm256_set1_epi64x(static_cast<int64_t>(halfBg));
+        __m256i vshifts[D::l];
         for (int i = 0; i < D::l; i++) {
-            for (int j = 0; j < D::l̅; j++) {
-                // Shift to get the (i,j)-th digit in base Bg
-                // When l̅=1 (j=0 only), this reduces to standard decomposition
-                const int shift = std::numeric_limits<typename P::T>::digits -
-                                  (i + 1) * D::Bgbit - j * D::B̅gbit;
-                decpoly[i * D::l̅ + j][n] = ((a >> shift) & maskBg) - halfBg;
+            const int shift = std::numeric_limits<typename P::T>::digits -
+                              (i + 1) * D::Bgbit;
+            vshifts[i] = _mm256_set1_epi64x(shift);
+        }
+        for (int n = 0; n < P::n; n += 4) {
+            __m256i va = _mm256_add_epi64(
+                _mm256_loadu_si256((const __m256i*)(poly.data() + n)),
+                voffset);
+            for (int i = 0; i < D::l; i++) {
+                __m256i vd = _mm256_sub_epi64(
+                    _mm256_and_si256(_mm256_srlv_epi64(va, vshifts[i]), vmask),
+                    vhalf);
+                _mm256_storeu_si256((__m256i*)(decpoly[i].data() + n), vd);
+            }
+        }
+    }
+    else
+#endif
+    {
+        for (int n = 0; n < P::n; n++) {
+            typename P::T a = poly[n] + offset + roundoffset;
+            for (int i = 0; i < D::l; i++) {
+                for (int j = 0; j < D::l̅; j++) {
+                    const int shift = std::numeric_limits<typename P::T>::digits -
+                                      (i + 1) * D::Bgbit - j * D::B̅gbit;
+                    decpoly[i * D::l̅ + j][n] = ((a >> shift) & maskBg) - halfBg;
+                }
             }
         }
     }

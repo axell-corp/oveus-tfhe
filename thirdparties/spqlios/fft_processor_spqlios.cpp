@@ -138,93 +138,36 @@ void FFT_Processor_Spqlios::execute_reverse_torus64_uint(
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus32(uint32_t *res, const double *a) {
-    //TODO: parallelization
+    // Scale a in-place by 2/N, then FFT directly on a — avoids copy to internal buffer.
+    // Callers pass an alignas(64) PolynomialInFD so in-place modification is safe.
+    double *ap = const_cast<double *>(a);
     static const double _2sN = double(2) / double(N);
-    //for (int32_t i=0; i<N; i++) real_inout_direct[i]=a[i]*_2sn;
     {
-        double *dst = real_inout_direct;
-        const double *sit = a;
-        const double *send = a + N;
-        const double *bla = &_2sN;
-        #ifdef USE_AVX512
-        __asm__ __volatile__ (
-        "vbroadcastsd (%3),%%zmm2\n"  // Broadcast _2sN to zmm2
-            "1:\n"
-            "vmovupd (%1),%%zmm0\n"       // Load 8 double-precision values from `sit` into zmm0
-            "vmulpd %%zmm2,%%zmm0,%%zmm0\n"  // Multiply zmm0 by zmm2
-            "vmovupd %%zmm0,(%0)\n"       // Store the result in `dst`
-            "addq $64,%1\n"               // Increment `sit` by 64 bytes (8 doubles)
-            "addq $64,%0\n"               // Increment `dst` by 64 bytes (8 doubles)
-            "cmpq %2,%1\n"                // Compare `sit` with `send`
-            "jb 1b\n"                     // Jump if `sit` < `send`
-            : "=r"(dst), "=r"(sit), "=r"(send), "=r"(bla)
-            : "0"(dst), "1"(sit), "2"(send), "3"(bla)
-            : "%zmm0", "%zmm2", "memory"
-        );
-        #else
-        __asm__ __volatile__ (
-        "vbroadcastsd (%3),%%ymm2\n"
-                "1:\n"
-                "vmovupd (%1),%%ymm0\n"
-                "vmulpd	%%ymm2,%%ymm0,%%ymm0\n"
-                "vmovapd %%ymm0,(%0)\n"
-                "addq $32,%1\n"
-                "addq $32,%0\n"
-                "cmpq %2,%1\n"
-                "jb 1b\n"
-        : "=r"(dst), "=r"(sit), "=r"(send), "=r"(bla)
-        : "0"(dst), "1"(sit), "2"(send), "3"(bla)
-        : "%ymm0", "%ymm2", "memory"
-        );
-        #endif
+        const __m256d vscale = _mm256_set1_pd(_2sN);
+        for (int i = 0; i < N; i += 4) {
+            __m256d v = _mm256_load_pd(ap + i);
+            _mm256_store_pd(ap + i, _mm256_mul_pd(v, vscale));
+        }
     }
-    fft(tables_direct, real_inout_direct);
-    // for (int32_t i = 0; i < N; i++) res[i] = uint32_t(int64_t(real_inout_direct[i]));
-    SPQLIOS::convert_f64_to_u32(res,real_inout_direct,N);
+    fft(tables_direct, ap);
+    SPQLIOS::convert_f64_to_u32(res, ap, N);
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus32_add(uint32_t *res, const double *a) {
+    // Scale a in-place by 2/N, then FFT, then convert and add
+    // Callers pass an alignas(64) PolynomialInFD so in-place modification is safe.
+    double *ap = const_cast<double *>(a);
     static const double _2sN = double(2) / double(N);
     {
-        double *dst = real_inout_direct;
-        const double *sit = a;
-        const double *send = a + N;
-        const double *bla = &_2sN;
-        #ifdef USE_AVX512
-        __asm__ __volatile__ (
-        "vbroadcastsd (%3),%%zmm2\n"
-            "1:\n"
-            "vmovupd (%1),%%zmm0\n"
-            "vmulpd %%zmm2,%%zmm0,%%zmm0\n"
-            "vmovupd %%zmm0,(%0)\n"
-            "addq $64,%1\n"
-            "addq $64,%0\n"
-            "cmpq %2,%1\n"
-            "jb 1b\n"
-            : "=r"(dst), "=r"(sit), "=r"(send), "=r"(bla)
-            : "0"(dst), "1"(sit), "2"(send), "3"(bla)
-            : "%zmm0", "%zmm2", "memory"
-        );
-        #else
-        __asm__ __volatile__ (
-        "vbroadcastsd (%3),%%ymm2\n"
-                "1:\n"
-                "vmovupd (%1),%%ymm0\n"
-                "vmulpd	%%ymm2,%%ymm0,%%ymm0\n"
-                "vmovapd %%ymm0,(%0)\n"
-                "addq $32,%1\n"
-                "addq $32,%0\n"
-                "cmpq %2,%1\n"
-                "jb 1b\n"
-        : "=r"(dst), "=r"(sit), "=r"(send), "=r"(bla)
-        : "0"(dst), "1"(sit), "2"(send), "3"(bla)
-        : "%ymm0", "%ymm2", "memory"
-        );
-        #endif
+        const __m256d vscale = _mm256_set1_pd(_2sN);
+        for (int i = 0; i < N; i += 4) {
+            __m256d v = _mm256_load_pd(ap + i);
+            _mm256_store_pd(ap + i, _mm256_mul_pd(v, vscale));
+        }
     }
-    fft(tables_direct, real_inout_direct);
-    for (int32_t i = 0; i < N; i++)
-        res[i] += static_cast<uint32_t>(int64_t(real_inout_direct[i]));
+    fft(tables_direct, ap);
+    // Vectorized double→int32 conversion and add
+    SPQLIOS::convert_f64_add_u32(res, ap, N);
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus32_q(uint32_t *res, const double *a, const uint32_t q) {
@@ -371,10 +314,66 @@ void FFT_Processor_Spqlios::execute_direct_torus32_rescale_clpx(
     }
 }
 
+// AVX2 vectorized IEEE754 double→int64 conversion (4 doubles at a time).
+// For each double: extract mantissa (53 bits), exponent, sign; shift mantissa
+// by (expo - 1075), apply sign.  Works because _mm256_sllv/_srlv with
+// shift >= 64 (from negative converted to unsigned) returns 0.
+static inline void f64_to_i64_avx2(uint64_t* res, const double* a, int N) {
+    const __m256i vmask0 = _mm256_set1_epi64x(0x000FFFFFFFFFFFFFll);
+    const __m256i vmask1 = _mm256_set1_epi64x(0x0010000000000000ll);
+    const __m256i vexpmask = _mm256_set1_epi64x(0x7FFll);
+    const __m256i voffset = _mm256_set1_epi64x(1075);
+    const __m256i vzero = _mm256_setzero_si256();
+    const uint64_t* vals = (const uint64_t*)a;
+    for (int i = 0; i < N; i += 4) {
+        __m256i raw = _mm256_loadu_si256((const __m256i*)(vals + i));
+        // Extract mantissa with implicit leading 1
+        __m256i mantissa = _mm256_or_si256(_mm256_and_si256(raw, vmask0), vmask1);
+        // Extract exponent
+        __m256i expo = _mm256_and_si256(_mm256_srli_epi64(raw, 52), vexpmask);
+        // shift = expo - 1075 (signed, but stored as uint64)
+        __m256i shift = _mm256_sub_epi64(expo, voffset);
+        __m256i neg_shift = _mm256_sub_epi64(voffset, expo);
+        // When shift >= 0: sllv gives correct result, srlv gives 0 (neg_shift < 0 → huge unsigned → 0)
+        // When shift < 0: sllv gives 0 (shift is huge unsigned → 0), srlv gives correct result
+        // When shift == 0: both give mantissa, OR still gives mantissa
+        __m256i val2 = _mm256_or_si256(
+            _mm256_sllv_epi64(mantissa, shift),
+            _mm256_srlv_epi64(mantissa, neg_shift));
+        // Apply sign: if sign bit set, negate via (val2 ^ sign_mask) - sign_mask
+        __m256i sign = _mm256_srli_epi64(raw, 63);
+        __m256i sign_mask = _mm256_sub_epi64(vzero, sign);
+        __m256i result = _mm256_sub_epi64(_mm256_xor_si256(val2, sign_mask), sign_mask);
+        _mm256_storeu_si256((__m256i*)(res + i), result);
+    }
+}
+
+static inline void f64_to_i64_add_avx2(uint64_t* res, const double* a, int N) {
+    const __m256i vmask0 = _mm256_set1_epi64x(0x000FFFFFFFFFFFFFll);
+    const __m256i vmask1 = _mm256_set1_epi64x(0x0010000000000000ll);
+    const __m256i vexpmask = _mm256_set1_epi64x(0x7FFll);
+    const __m256i voffset = _mm256_set1_epi64x(1075);
+    const __m256i vzero = _mm256_setzero_si256();
+    const uint64_t* vals = (const uint64_t*)a;
+    for (int i = 0; i < N; i += 4) {
+        __m256i raw = _mm256_loadu_si256((const __m256i*)(vals + i));
+        __m256i mantissa = _mm256_or_si256(_mm256_and_si256(raw, vmask0), vmask1);
+        __m256i expo = _mm256_and_si256(_mm256_srli_epi64(raw, 52), vexpmask);
+        __m256i shift = _mm256_sub_epi64(expo, voffset);
+        __m256i neg_shift = _mm256_sub_epi64(voffset, expo);
+        __m256i val2 = _mm256_or_si256(
+            _mm256_sllv_epi64(mantissa, shift),
+            _mm256_srlv_epi64(mantissa, neg_shift));
+        __m256i sign = _mm256_srli_epi64(raw, 63);
+        __m256i sign_mask = _mm256_sub_epi64(vzero, sign);
+        __m256i result = _mm256_sub_epi64(_mm256_xor_si256(val2, sign_mask), sign_mask);
+        __m256i prev = _mm256_loadu_si256((const __m256i*)(res + i));
+        _mm256_storeu_si256((__m256i*)(res + i), _mm256_add_epi64(prev, result));
+    }
+}
+
 void FFT_Processor_Spqlios::execute_direct_torus64(uint64_t* res, double* a) {
     static const double _2sN = double(2)/double(N);
-    // Scale a in-place by 2/N, then FFT directly on a — no copy to real_inout_direct.
-    // Callers pass an alignas(64) PolynomialInFD so aligned loads/stores are safe.
     {
         const __m256d vscale = _mm256_set1_pd(_2sN);
         for (int i = 0; i < N; i += 4) {
@@ -383,19 +382,7 @@ void FFT_Processor_Spqlios::execute_direct_torus64(uint64_t* res, double* a) {
         }
     }
     fft(tables_direct, a);
-    {
-        const uint64_t* const vals = (const uint64_t*) a;
-        static const uint64_t valmask0 = 0x000FFFFFFFFFFFFFul;
-        static const uint64_t valmask1 = 0x0010000000000000ul;
-        static const uint16_t expmask0 = 0x07FFu;
-        for (int i = 0; i < N; i++) {
-            uint64_t val = (vals[i]&valmask0)|valmask1; //mantissa on 53 bits
-            uint16_t expo = (vals[i]>>52)&expmask0; //exponent 11 bits
-            int16_t trans = expo-1075;
-            uint64_t val2 = trans>0?(val<<trans):(val>>-trans);
-            res[i]=(vals[i]>>63)?-val2:val2;
-        }
-    }
+    f64_to_i64_avx2(res, a, N);
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus64_add(uint64_t* res, double* a) {
@@ -408,19 +395,7 @@ void FFT_Processor_Spqlios::execute_direct_torus64_add(uint64_t* res, double* a)
         }
     }
     fft(tables_direct, a);
-    {
-        const uint64_t* const vals = (const uint64_t*) a;
-        static const uint64_t valmask0 = 0x000FFFFFFFFFFFFFul;
-        static const uint64_t valmask1 = 0x0010000000000000ul;
-        static const uint16_t expmask0 = 0x07FFu;
-        for (int i = 0; i < N; i++) {
-            uint64_t val = (vals[i]&valmask0)|valmask1;
-            uint16_t expo = (vals[i]>>52)&expmask0;
-            int16_t trans = expo-1075;
-            uint64_t val2 = trans>0?(val<<trans):(val>>-trans);
-            res[i] += (vals[i]>>63)?-val2:val2;
-        }
-    }
+    f64_to_i64_add_avx2(res, a, N);
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus64_rescale(uint64_t* res, const double* a, const double Δ) {

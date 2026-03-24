@@ -29,6 +29,7 @@ alignas(64) const TRGSWFFT<lvl2param> trgswonelvl2 =
 
 // Fused CMUX for l̅==1 path: rotation + ExternalProduct + accumulation
 // in one pass, avoiding full TRLWE temp allocation and separate add-back loop.
+// Uses FMAInFD_Multi to load decpolyfft once per level and reuse across k+1 rows.
 template <class P>
 void CMUXFFTwithPolynomialMulByXaiMinusOne(
     TRLWE<P> &acc, const TRGSWFFT<P> &trgswfft, const typename P::T a)
@@ -43,12 +44,10 @@ void CMUXFFTwithPolynomialMulByXaiMinusOne(
         alignas(64) DecomposedNoncePolynomial<P> decpoly;
         NonceDecomposition<P>(decpoly, rotated);
         TwistIFFT<P>(decpolyfft, decpoly[0]);
-        for (int m = 0; m < P::k + 1; m++)
-            MulInFD<P::n>(restrlwefft[m], decpolyfft, trgswfft[0][m]);
+        MulInFD_Multi<P::n, P::k + 1>(restrlwefft, decpolyfft, trgswfft[0]);
         for (int i = 1; i < P::lₐ; i++) {
             TwistIFFT<P>(decpolyfft, decpoly[i]);
-            for (int m = 0; m < P::k + 1; m++)
-                FMAInFD<P::n>(restrlwefft[m], decpolyfft, trgswfft[i][m]);
+            FMAInFD_Multi<P::n, P::k + 1>(restrlwefft, decpolyfft, trgswfft[i]);
         }
     }
 
@@ -59,9 +58,8 @@ void CMUXFFTwithPolynomialMulByXaiMinusOne(
         NonceDecomposition<P>(decpoly, rotated);
         for (int i = 0; i < P::lₐ; i++) {
             TwistIFFT<P>(decpolyfft, decpoly[i]);
-            for (int m = 0; m < P::k + 1; m++)
-                FMAInFD<P::n>(restrlwefft[m], decpolyfft,
-                              trgswfft[i + k_idx * P::lₐ][m]);
+            FMAInFD_Multi<P::n, P::k + 1>(restrlwefft, decpolyfft,
+                                trgswfft[i + k_idx * P::lₐ]);
         }
     }
 
@@ -72,9 +70,8 @@ void CMUXFFTwithPolynomialMulByXaiMinusOne(
         Decomposition<P>(decpoly, rotated);
         for (int i = 0; i < P::l; i++) {
             TwistIFFT<P>(decpolyfft, decpoly[i]);
-            for (int m = 0; m < P::k + 1; m++)
-                FMAInFD<P::n>(restrlwefft[m], decpolyfft,
-                              trgswfft[i + P::k * P::lₐ][m]);
+            FMAInFD_Multi<P::n, P::k + 1>(restrlwefft, decpolyfft,
+                                trgswfft[i + P::k * P::lₐ]);
         }
     }
 
