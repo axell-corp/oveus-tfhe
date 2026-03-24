@@ -14,7 +14,7 @@ int main()
     using low2midP = TFHEpp::lvlh1param;
     constexpr auto numtest = 10;
     constexpr uint basebit = 4;
-    constexpr uint64_t numdigits = 64 / 4;
+    constexpr uint64_t numdigits = 64 / basebit;
 
     TFHEpp::SecretKey sk;
     TFHEpp::EvalKey ek;
@@ -56,8 +56,11 @@ int main()
     }
 
     // Check the correctness of the results
+    // HomDecomp extracts the bottom (basebit*numdigits) bits of the phase.
+    // digit d (0-indexed) corresponds to bits [basebit*d, basebit*(d+1)).
+    using domainT = typename high2midP::domainP::T;
     for (uint test = 0; test < numtest; test++) {
-        uint64_t phase = TFHEpp::tlweSymPhase<typename high2midP::domainP>(
+        domainT phase = TFHEpp::tlweSymPhase<typename high2midP::domainP>(
             ciphers.at(test), sk.key.get<TFHEpp::lvl3param>());
         for (uint digit = 0; digit < numdigits; digit++) {
             int plainResult =
@@ -65,8 +68,9 @@ int main()
                                           1U << basebit>(
                     result_multiple[test][digit],
                     sk.key.get<typename high2midP::targetP>());
-            const uint64_t plainExpected =
-                ((phase >> (basebit * digit)) & ((1ULL << basebit) - 1));
+            const uint64_t plainExpected = static_cast<uint64_t>(
+                (phase >> (basebit * digit)) &
+                static_cast<domainT>((1ULL << basebit) - 1));
             plainResult = (plainResult + (1U << basebit)) % (1U << basebit);
             assert(plainExpected == plainResult);
         }

@@ -22,7 +22,7 @@ jobs:
         submodules: recursive
     - name: build and test
       run: |
-        cmake . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENABLE_TEST=ON
+        cmake . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_TEST=ON -DCMAKE_CXX_FLAGS_RELEASE="-O3" -DCMAKE_C_FLAGS_RELEASE="-O3"
         cd build
         ninja
         test/test.sh
@@ -43,7 +43,7 @@ jobs:
         submodules: recursive
     - name: build and test
       run: |
-        cmake . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENABLE_TEST=ON
+        cmake . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_TEST=ON -DCMAKE_CXX_FLAGS_RELEASE="-O3" -DCMAKE_C_FLAGS_RELEASE="-O3"
         cd build
         ninja
         test/test.sh
@@ -64,7 +64,7 @@ jobs:
         submodules: recursive
     - name: build and test
       run: |
-        cmake . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENABLE_TEST=ON -DUSE_CONCRETE=ON
+        cmake . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_TEST=ON -DUSE_CONCRETE=ON
         cd build
         ninja
         test/test.sh
@@ -112,7 +112,7 @@ jobs:
         submodules: recursive
     - name: build and test
       run: |
-        /cmake-binary/bin/cmake . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang -DCMAKE_LINKER_TYPE=LLD -DENABLE_TEST=ON
+        /cmake-binary/bin/cmake . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang -DCMAKE_LINKER_TYPE=LLD -DENABLE_TEST=ON -DCMAKE_CXX_FLAGS_RELEASE="-O3" -DCMAKE_C_FLAGS_RELEASE="-O3"
         cd build
         ninja
         test/test.sh

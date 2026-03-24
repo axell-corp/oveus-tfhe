@@ -52,12 +52,16 @@ void HomDecomp(std::array<TLWE<typename high2midP::targetP>, numdigit> &cres,
     TFHEpp::TLWE<typename high2midP::targetP> subtlwe;
 
     // cres will be used as a reusable buffer
-    constexpr uint32_t plain_modulusbit = basebit * numdigit;
+    // Use domain torus width (not basebit*numdigit) so that after key switching
+    // to a narrower torus, the lower bits are zero-padded rather than filled
+    // with uncontrolled phase data from the wider torus.
+    constexpr uint32_t domain_digits =
+        std::numeric_limits<typename high2midP::domainP::T>::digits;
 #pragma omp parallel for default(none) shared(cin, cres, kskh2m)
     for (int digit = 1; digit <= numdigit; digit++) {
         TFHEpp::TLWE<typename high2midP::domainP> switchedtlwe;
         for (int i = 0; i <= high2midP::domainP::k * high2midP::domainP::n; i++)
-            switchedtlwe[i] = cin[i] << (plain_modulusbit - basebit * digit);
+            switchedtlwe[i] = cin[i] << (domain_digits - basebit * digit);
         IdentityKeySwitch<high2midP>(cres[digit - 1], switchedtlwe, kskh2m);
     }
     for (int digit = 1; digit <= numdigit; digit++) {
