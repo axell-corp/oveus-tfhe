@@ -1,5 +1,6 @@
 #include <cassert>
 #include <cmath>
+#include <cstring>
 #include<cstdint>
 
 #include<params.hpp>
@@ -7,35 +8,10 @@
 #include "x86.h"
 #include "fft_processor_spqlios.h"
 
+// Constructor, destructor, thread_local instances, and C interface (fft/ifft/new_*_table)
+// are in stockham_fft_avx2.cpp. This file contains only the execute_* methods.
+
 using namespace std;
-
-int32_t rev(int32_t x, int32_t M) {
-    int32_t reps = 0;
-    for (int32_t j = M; j > 1; j /= 2) {
-        reps = 2 * reps + (x % 2);
-        x /= 2;
-    }
-    return reps;
-}
-
-FFT_Processor_Spqlios::FFT_Processor_Spqlios(const int32_t N) : _2N(2 * N), N(N), Ns2(N / 2) {
-    tables_direct = new_fft_table(N);
-    tables_reverse = new_ifft_table(N);
-    real_inout_direct = fft_table_get_buffer(tables_direct);
-    imag_inout_direct = real_inout_direct + Ns2;
-    reva = new int32_t[Ns2];
-    cosomegaxminus1 = new double[2 * _2N];
-    sinomegaxminus1 = cosomegaxminus1 + _2N;
-    int32_t rev1 = rev(1, _2N);
-    int32_t rev3 = rev(3, _2N);
-    //printf("rev-interval: %d, %d\n",rev1,rev3);
-    for (int32_t revi = rev1; revi < rev3; revi++)
-        reva[revi - rev1] = rev(revi, _2N);
-    for (int32_t j = 0; j < _2N; j++) {
-        cosomegaxminus1[j] = cos(2 * M_PI * j / _2N) - 1.;
-        sinomegaxminus1[j] = sin(2 * M_PI * j / _2N);
-    }
-}
 
 void FFT_Processor_Spqlios::execute_reverse_uint(double *res, const uint32_t *a) {
     #ifdef USE_AVX512
@@ -138,186 +114,44 @@ void FFT_Processor_Spqlios::execute_reverse_torus64_uint(
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus32(uint32_t *res, const double *a) {
-    // Scale a in-place by 2/N, then FFT directly on a — avoids copy to internal buffer.
-    // Callers pass an alignas(64) PolynomialInFD so in-place modification is safe.
+    // 2/N scaling is baked into the Stockham forward twist twiddles.
     double *ap = const_cast<double *>(a);
-    static const double _2sN = double(2) / double(N);
-    {
-        const __m256d vscale = _mm256_set1_pd(_2sN);
-        for (int i = 0; i < N; i += 4) {
-            __m256d v = _mm256_load_pd(ap + i);
-            _mm256_store_pd(ap + i, _mm256_mul_pd(v, vscale));
-        }
-    }
     fft(tables_direct, ap);
     SPQLIOS::convert_f64_to_u32(res, ap, N);
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus32_add(uint32_t *res, const double *a) {
-    // Scale a in-place by 2/N, then FFT, then convert and add
-    // Callers pass an alignas(64) PolynomialInFD so in-place modification is safe.
+    // 2/N scaling is baked into the Stockham forward twist twiddles.
     double *ap = const_cast<double *>(a);
-    static const double _2sN = double(2) / double(N);
-    {
-        const __m256d vscale = _mm256_set1_pd(_2sN);
-        for (int i = 0; i < N; i += 4) {
-            __m256d v = _mm256_load_pd(ap + i);
-            _mm256_store_pd(ap + i, _mm256_mul_pd(v, vscale));
-        }
-    }
     fft(tables_direct, ap);
-    // Vectorized double→int32 conversion and add
     SPQLIOS::convert_f64_add_u32(res, ap, N);
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus32_q(uint32_t *res, const double *a, const uint32_t q) {
-    //TODO: parallelization
-    static const double _2sN = double(2) / double(N);
-    //for (int32_t i=0; i<N; i++) real_inout_direct[i]=a[i]*_2sn;
-    {
-        double *dst = real_inout_direct;
-        const double *sit = a;
-        const double *send = a + N;
-        //double __2sN = 2./N;
-        const double *bla = &_2sN;
-        #ifdef USE_AVX512
-        __asm__ __volatile__ (
-        "vbroadcastsd (%3),%%zmm2\n"  // Broadcast _2sN to zmm2
-            "1:\n"
-            "vmovupd (%1),%%zmm0\n"       // Load 8 double-precision values from `sit` into zmm0
-            "vmulpd %%zmm2,%%zmm0,%%zmm0\n"  // Multiply zmm0 by zmm2
-            "vmovupd %%zmm0,(%0)\n"       // Store the result in `dst`
-            "addq $64,%1\n"               // Increment `sit` by 64 bytes (8 doubles)
-            "addq $64,%0\n"               // Increment `dst` by 64 bytes (8 doubles)
-            "cmpq %2,%1\n"                // Compare `sit` with `send`
-            "jb 1b\n"                     // Jump if `sit` < `send`
-            : "=r"(dst), "=r"(sit), "=r"(send), "=r"(bla)
-            : "0"(dst), "1"(sit), "2"(send), "3"(bla)
-            : "%zmm0", "%zmm2", "memory"
-        );
-        #else
-        __asm__ __volatile__ (
-        "vbroadcastsd (%3),%%ymm2\n"
-                "1:\n"
-                "vmovupd (%1),%%ymm0\n"
-                "vmulpd	%%ymm2,%%ymm0,%%ymm0\n"
-                "vmovapd %%ymm0,(%0)\n"
-                "addq $32,%1\n"
-                "addq $32,%0\n"
-                "cmpq %2,%1\n"
-                "jb 1b\n"
-        : "=r"(dst), "=r"(sit), "=r"(send), "=r"(bla)
-        : "0"(dst), "1"(sit), "2"(send), "3"(bla)
-        : "%ymm0", "%ymm2", "memory"
-        );
-        #endif
-    }
+    memcpy(real_inout_direct, a, N * sizeof(double));
     fft(tables_direct, real_inout_direct);
     for (int32_t i = 0; i < N; i++) res[i] = uint32_t((int64_t(real_inout_direct[i])%q+q)%q);
 }
 
-void FFT_Processor_Spqlios::execute_direct_torus32_rescale(uint32_t *res, const double *a, const double Δ) {
-    //TODO: parallelization
-    static const double _2sN = double(2) / double(N);
-    //for (int32_t i=0; i<N; i++) real_inout_direct[i]=a[i]*_2sn;
-    {
-        double *dst = real_inout_direct;
-        const double *sit = a;
-        const double *send = a + N;
-        const double *bla = &_2sN;
-        #ifdef USE_AVX512
-        __asm__ __volatile__ (
-        "vbroadcastsd (%3),%%zmm2\n"  // Broadcast _2sN to zmm2
-            "1:\n"
-            "vmovupd (%1),%%zmm0\n"       // Load 8 double-precision values from `sit` into zmm0
-            "vmulpd %%zmm2,%%zmm0,%%zmm0\n"  // Multiply zmm0 by zmm2
-            "vmovupd %%zmm0,(%0)\n"       // Store the result in `dst`
-            "addq $64,%1\n"               // Increment `sit` by 64 bytes (8 doubles)
-            "addq $64,%0\n"               // Increment `dst` by 64 bytes (8 doubles)
-            "cmpq %2,%1\n"                // Compare `sit` with `send`
-            "jb 1b\n"                     // Jump if `sit` < `send`
-            : "=r"(dst), "=r"(sit), "=r"(send), "=r"(bla)
-            : "0"(dst), "1"(sit), "2"(send), "3"(bla)
-            : "%zmm0", "%zmm2", "memory"
-        );
-        #else
-        __asm__ __volatile__ (
-        "vbroadcastsd (%3),%%ymm2\n"
-                "1:\n"
-                "vmovupd (%1),%%ymm0\n"
-                "vmulpd	%%ymm2,%%ymm0,%%ymm0\n"
-                "vmovapd %%ymm0,(%0)\n"
-                "addq $32,%1\n"
-                "addq $32,%0\n"
-                "cmpq %2,%1\n"
-                "jb 1b\n"
-        : "=r"(dst), "=r"(sit), "=r"(send), "=r"(bla)
-        : "0"(dst), "1"(sit), "2"(send), "3"(bla)
-        : "%ymm0", "%ymm2", "memory"
-        );
-        #endif
-    }
+void FFT_Processor_Spqlios::execute_direct_torus32_rescale(uint32_t *res, const double *a, const double D) {
+    memcpy(real_inout_direct, a, N * sizeof(double));
     fft(tables_direct, real_inout_direct);
-    for (int32_t i = 0; i < N; i++) res[i] = static_cast<uint32_t>(int64_t(real_inout_direct[i]/Δ));
+    for (int32_t i = 0; i < N; i++) res[i] = static_cast<uint32_t>(int64_t(real_inout_direct[i]/D));
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus32_rescale_clpx(
-    uint32_t *res, const double *a, const double q,
-    const uint32_t plain_modulus)
-{
-    static const double _2sN = double(2) / double(N);
-    {
-        double *dst = real_inout_direct;
-        const double *sit = a;
-        const double *send = a + N;
-        const double *bla = &_2sN;
-#ifdef USE_AVX512
-        __asm__ __volatile__(
-            "vbroadcastsd (%3),%%zmm2\n"
-            "1:\n"
-            "vmovupd (%1),%%zmm0\n"
-            "vmulpd %%zmm2,%%zmm0,%%zmm0\n"
-            "vmovupd %%zmm0,(%0)\n"
-            "addq $64,%1\n"
-            "addq $64,%0\n"
-            "cmpq %2,%1\n"
-            "jb 1b\n"
-            : "=r"(dst), "=r"(sit), "=r"(send), "=r"(bla)
-            : "0"(dst), "1"(sit), "2"(send), "3"(bla)
-            : "%zmm0", "%zmm2", "memory");
-#else
-        __asm__ __volatile__(
-            "vbroadcastsd (%3),%%ymm2\n"
-            "1:\n"
-            "vmovupd (%1),%%ymm0\n"
-            "vmulpd %%ymm2,%%ymm0,%%ymm0\n"
-            "vmovapd %%ymm0,(%0)\n"
-            "addq $32,%1\n"
-            "addq $32,%0\n"
-            "cmpq %2,%1\n"
-            "jb 1b\n"
-            : "=r"(dst), "=r"(sit), "=r"(send), "=r"(bla)
-            : "0"(dst), "1"(sit), "2"(send), "3"(bla)
-            : "%ymm0", "%ymm2", "memory");
-#endif
-    }
+    uint32_t *res, const double *a, const double q, const uint32_t plain_modulus) {
+    memcpy(real_inout_direct, a, N * sizeof(double));
     fft(tables_direct, real_inout_direct);
     for (int32_t i = 0; i < N; i++) {
         if (i == 0)
-            res[i] = static_cast<uint32_t>(
-                std::llround(-real_inout_direct[N - 1] / q -
-                             real_inout_direct[0] * plain_modulus / q));
+            res[i] = static_cast<uint32_t>(std::llround(-real_inout_direct[N-1]/q - real_inout_direct[0]*plain_modulus/q));
         else
-            res[i] = static_cast<uint32_t>(
-                std::llround(real_inout_direct[i - 1] / q -
-                             real_inout_direct[i] * plain_modulus / q));
+            res[i] = static_cast<uint32_t>(std::llround(real_inout_direct[i-1]/q - real_inout_direct[i]*plain_modulus/q));
     }
 }
 
-// AVX2 vectorized IEEE754 double→int64 conversion (4 doubles at a time).
-// For each double: extract mantissa (53 bits), exponent, sign; shift mantissa
-// by (expo - 1075), apply sign.  Works because _mm256_sllv/_srlv with
-// shift >= 64 (from negative converted to unsigned) returns 0.
+// AVX2 vectorized IEEE754 double→int64 conversion
 static inline void f64_to_i64_avx2(uint64_t* res, const double* a, int N) {
     const __m256i vmask0 = _mm256_set1_epi64x(0x000FFFFFFFFFFFFFll);
     const __m256i vmask1 = _mm256_set1_epi64x(0x0010000000000000ll);
@@ -327,20 +161,13 @@ static inline void f64_to_i64_avx2(uint64_t* res, const double* a, int N) {
     const uint64_t* vals = (const uint64_t*)a;
     for (int i = 0; i < N; i += 4) {
         __m256i raw = _mm256_loadu_si256((const __m256i*)(vals + i));
-        // Extract mantissa with implicit leading 1
         __m256i mantissa = _mm256_or_si256(_mm256_and_si256(raw, vmask0), vmask1);
-        // Extract exponent
         __m256i expo = _mm256_and_si256(_mm256_srli_epi64(raw, 52), vexpmask);
-        // shift = expo - 1075 (signed, but stored as uint64)
         __m256i shift = _mm256_sub_epi64(expo, voffset);
         __m256i neg_shift = _mm256_sub_epi64(voffset, expo);
-        // When shift >= 0: sllv gives correct result, srlv gives 0 (neg_shift < 0 → huge unsigned → 0)
-        // When shift < 0: sllv gives 0 (shift is huge unsigned → 0), srlv gives correct result
-        // When shift == 0: both give mantissa, OR still gives mantissa
         __m256i val2 = _mm256_or_si256(
             _mm256_sllv_epi64(mantissa, shift),
             _mm256_srlv_epi64(mantissa, neg_shift));
-        // Apply sign: if sign bit set, negate via (val2 ^ sign_mask) - sign_mask
         __m256i sign = _mm256_srli_epi64(raw, 63);
         __m256i sign_mask = _mm256_sub_epi64(vzero, sign);
         __m256i result = _mm256_sub_epi64(_mm256_xor_si256(val2, sign_mask), sign_mask);
@@ -373,149 +200,28 @@ static inline void f64_to_i64_add_avx2(uint64_t* res, const double* a, int N) {
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus64(uint64_t* res, double* a) {
-    static const double _2sN = double(2)/double(N);
-    {
-        const __m256d vscale = _mm256_set1_pd(_2sN);
-        for (int i = 0; i < N; i += 4) {
-            __m256d v = _mm256_loadu_pd(a + i);
-            _mm256_storeu_pd(a + i, _mm256_mul_pd(v, vscale));
-        }
-    }
+    // 2/N scaling baked into Stockham forward twist twiddles.
     fft(tables_direct, a);
     f64_to_i64_avx2(res, a, N);
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus64_add(uint64_t* res, double* a) {
-    static const double _2sN = double(2)/double(N);
-    {
-        const __m256d vscale = _mm256_set1_pd(_2sN);
-        for (int i = 0; i < N; i += 4) {
-            __m256d v = _mm256_loadu_pd(a + i);
-            _mm256_storeu_pd(a + i, _mm256_mul_pd(v, vscale));
-        }
-    }
+    // 2/N scaling baked into Stockham forward twist twiddles.
     fft(tables_direct, a);
     f64_to_i64_add_avx2(res, a, N);
 }
 
-void FFT_Processor_Spqlios::execute_direct_torus64_rescale(uint64_t* res, const double* a, const double Δ) {
-    static const double _2sN = double(2)/double(N);
-    //static const double _2p64 = pow(2.,64);
-    //for (int i=0; i<N; i++) real_inout_direct[i]=a[i]*_2sn;
-    {
-    	double* dst = real_inout_direct;
-	const double* sit = a;
-	const double* send = a+N;
-	//double __2sN = 2./N;
-	const double* bla = &_2sN;
-	__asm__ __volatile__ (
-		"vbroadcastsd (%3),%%ymm2\n"
-		"1:\n"
-		"vmovupd (%1),%%ymm0\n"
-		"vmulpd	%%ymm2,%%ymm0,%%ymm0\n"
-		"vmovapd %%ymm0,(%0)\n"
-		"addq $32,%1\n"
-		"addq $32,%0\n"
-		"cmpq %2,%1\n"
-		"jb 1b\n"
-		: "=r"(dst),"=r"(sit),"=r"(send),"=r"(bla)
-		: "0"(dst),"1"(sit),"2"(send),"3"(bla)
-		: "%ymm0","%ymm2","memory"
-		);
-    }
-    fft(tables_direct,real_inout_direct); 
-    for (int i=0; i<N; i++) res[i] = uint64_t(std::round(real_inout_direct[i]/Δ));
+void FFT_Processor_Spqlios::execute_direct_torus64_rescale(uint64_t* res, const double* a, const double D) {
+    memcpy(real_inout_direct, a, N * sizeof(double));
+    fft(tables_direct, real_inout_direct);
+    for (int i=0; i<N; i++) res[i] = uint64_t(std::round(real_inout_direct[i]/D));
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus64_rescale_clpx(
-    uint64_t *res, const double *a, const uint32_t plain_modulus)
-{
-    static const double _2sN = double(2) / double(N);
-    {
-        double *dst = real_inout_direct;
-        const double *sit = a;
-        const double *send = a + N;
-        const double *bla = &_2sN;
-        __asm__ __volatile__(
-            "vbroadcastsd (%3),%%ymm2\n"
-            "1:\n"
-            "vmovupd (%1),%%ymm0\n"
-            "vmulpd %%ymm2,%%ymm0,%%ymm0\n"
-            "vmovapd %%ymm0,(%0)\n"
-            "addq $32,%1\n"
-            "addq $32,%0\n"
-            "cmpq %2,%1\n"
-            "jb 1b\n"
-            : "=r"(dst), "=r"(sit), "=r"(send), "=r"(bla)
-            : "0"(dst), "1"(sit), "2"(send), "3"(bla)
-            : "%ymm0", "%ymm2", "memory");
-    }
+    uint64_t *res, const double *a, const uint32_t plain_modulus) {
+    memcpy(real_inout_direct, a, N * sizeof(double));
     fft(tables_direct, real_inout_direct);
-#ifdef USE_AVX512
-    const uint64_t *vals = (const uint64_t *) real_inout_direct;
-    static const uint64_t valmask0 = 0x000FFFFFFFFFFFFFul;
-    static const uint64_t valmask1 = 0x0010000000000000ul;
-    static const uint16_t expmask0 = 0x07FFu;
-    for (int i = 0; i < N; i++) {
-        uint32_t prev = (i == 0) ? N - 1 : i - 1;
-
-        uint64_t val_prev = (vals[prev] & valmask0) | valmask1;
-        uint16_t exp_prev = (vals[prev] >> 52) & expmask0;
-        int16_t shift_prev = exp_prev - 1075 - 63;
-        uint64_t scaled_prev =
-            shift_prev > 0 ? (val_prev << shift_prev) : (val_prev >> -shift_prev);
-
-        uint64_t val_cur = (vals[i] & valmask0) | valmask1;
-        uint16_t exp_cur = (vals[i] >> 52) & expmask0;
-        int16_t shift_cur = exp_cur - 1075 - 63;
-        val_cur *= plain_modulus;
-        uint64_t scaled_cur =
-            shift_cur > 0 ? (val_cur << shift_cur) : (val_cur >> -shift_cur);
-
-        if (i == 0)
-            res[i] = -((vals[prev] >> 63) ? -scaled_prev : scaled_prev) -
-                     ((vals[i] >> 63) ? -scaled_cur : scaled_cur);
-        else
-            res[i] = ((vals[prev] >> 63) ? -scaled_prev : scaled_prev) -
-                     ((vals[i] >> 63) ? -scaled_cur : scaled_cur);
-    }
-#else
-    const uint64_t *vals = (const uint64_t *) real_inout_direct;
-    static const uint64_t valmask0 = 0x000FFFFFFFFFFFFFul;
-    static const uint64_t valmask1 = 0x0010000000000000ul;
-    static const uint16_t expmask0 = 0x07FFu;
-    for (int i = 0; i < N; i++) {
-        uint32_t prev = (i == 0) ? N - 1 : i - 1;
-
-        uint64_t val_prev = (vals[prev] & valmask0) | valmask1;
-        uint16_t exp_prev = (vals[prev] >> 52) & expmask0;
-        int16_t shift_prev = exp_prev - 1075 - 63;
-        uint64_t scaled_prev =
-            shift_prev > 0 ? (val_prev << shift_prev) : (val_prev >> -shift_prev);
-
-        uint64_t val_cur = (vals[i] & valmask0) | valmask1;
-        uint16_t exp_cur = (vals[i] >> 52) & expmask0;
-        int16_t shift_cur = exp_cur - 1075 - 63;
-        val_cur *= plain_modulus;
-        uint64_t scaled_cur =
-            shift_cur > 0 ? (val_cur << shift_cur) : (val_cur >> -shift_cur);
-
-        if (i == 0)
-            res[i] = -((vals[prev] >> 63) ? -scaled_prev : scaled_prev) -
-                     ((vals[i] >> 63) ? -scaled_cur : scaled_cur);
-        else
-            res[i] = ((vals[prev] >> 63) ? -scaled_prev : scaled_prev) -
-                     ((vals[i] >> 63) ? -scaled_cur : scaled_cur);
-    }
-#endif
+    f64_to_i64_avx2(res, real_inout_direct, N);
 }
 
-FFT_Processor_Spqlios::~FFT_Processor_Spqlios() {
-    delete (tables_direct);
-    delete (tables_reverse);
-    delete[] cosomegaxminus1;
-}
-
-thread_local FFT_Processor_Spqlios fftplvl1(TFHEpp::lvl1param::n);
-thread_local FFT_Processor_Spqlios fftplvl2(TFHEpp::lvl2param::n);
-thread_local FFT_Processor_Spqlios fftplvl3(TFHEpp::lvl3param::n);
+// Destructor and thread_local instances are in stockham_fft_avx2.cpp

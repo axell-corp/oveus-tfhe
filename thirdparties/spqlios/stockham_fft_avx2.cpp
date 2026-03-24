@@ -279,93 +279,110 @@ static void stockham_fft_forward(
         s *= 4; q /= 4;
     }
 
-    // Last pass: q=1, fused with twist
-    // Each butterfly reads 4 values at stride s, writes 4 contiguous outputs.
-    // Apply twist on output.
+    // Last pass: q=1, fused with twist.
+    // Process 4 j-values at once: load from stride-s positions (contiguous per group),
+    // do 4 butterflies in parallel, 4×4 transpose, apply twist, store contiguous.
     {
         const __m256d neg = _mm256_set1_pd(-0.0);
         const double *tw_cos = twist_tw;
         const double *tw_sin = twist_tw + ns4;
 
-        for (int32_t j = 0; j < s; j++) {
-            // Twiddles for this butterfly
-            __m256d w1_re, w1_im, w2_re, w2_im, w3_re, w3_im;
-            if (j == 0) {
-                w1_re = w2_re = w3_re = _mm256_set1_pd(1.0);
-                w1_im = w2_im = w3_im = _mm256_setzero_pd();
-            } else {
-                const double *twj = tw + j * 6;
-                w1_re = _mm256_set1_pd(twj[0]); w1_im = _mm256_set1_pd(twj[1]);
-                w2_re = _mm256_set1_pd(twj[2]); w2_im = _mm256_set1_pd(twj[3]);
-                w3_re = _mm256_set1_pd(twj[4]); w3_im = _mm256_set1_pd(twj[5]);
-            }
+        for (int32_t j = 0; j < s; j += 4) {
+            // Load 4 consecutive values from each quarter: a[j..j+3], b[j+s..j+s+3], etc.
+            __m256d a_re = _mm256_loadu_pd(cur_re + j);
+            __m256d a_im = _mm256_loadu_pd(cur_im + j);
+            __m256d b_re = _mm256_loadu_pd(cur_re + j + s);
+            __m256d b_im = _mm256_loadu_pd(cur_im + j + s);
+            __m256d c_re = _mm256_loadu_pd(cur_re + j + 2*s);
+            __m256d c_im = _mm256_loadu_pd(cur_im + j + 2*s);
+            __m256d d_re = _mm256_loadu_pd(cur_re + j + 3*s);
+            __m256d d_im = _mm256_loadu_pd(cur_im + j + 3*s);
 
-            // q=1: only p=0 iteration, but we need 4 values at stride s
-            // Gather 4 scalar values from stride-s positions
-            double a_re_s[4], a_im_s[4], b_re_s[4], b_im_s[4];
-            double c_re_s[4], c_im_s[4], d_re_s[4], d_im_s[4];
-            // Not enough elements for vectorized gather, but this only runs
-            // for the last pass where q=1
-            a_re_s[0] = cur_re[j]; a_im_s[0] = cur_im[j];
-            b_re_s[0] = cur_re[j + s]; b_im_s[0] = cur_im[j + s];
-            c_re_s[0] = cur_re[j + 2*s]; c_im_s[0] = cur_im[j + 2*s];
-            d_re_s[0] = cur_re[j + 3*s]; d_im_s[0] = cur_im[j + 3*s];
+            // Radix-4 butterfly (4 butterflies in parallel)
+            __m256d apc_re = _mm256_add_pd(a_re, c_re);
+            __m256d apc_im = _mm256_add_pd(a_im, c_im);
+            __m256d amc_re = _mm256_sub_pd(a_re, c_re);
+            __m256d amc_im = _mm256_sub_pd(a_im, c_im);
+            __m256d bpd_re = _mm256_add_pd(b_re, d_re);
+            __m256d bpd_im = _mm256_add_pd(b_im, d_im);
+            __m256d bmd_re = _mm256_sub_pd(b_re, d_re);
+            __m256d bmd_im = _mm256_sub_pd(b_im, d_im);
+            __m256d jbmd_re = _mm256_xor_pd(bmd_im, neg); // -bmd_im
+            __m256d jbmd_im = bmd_re;
 
-            // Butterfly (scalar for q=1)
-            double apc_r = a_re_s[0] + c_re_s[0], apc_i = a_im_s[0] + c_im_s[0];
-            double amc_r = a_re_s[0] - c_re_s[0], amc_i = a_im_s[0] - c_im_s[0];
-            double bpd_r = b_re_s[0] + d_re_s[0], bpd_i = b_im_s[0] + d_im_s[0];
-            double bmd_r = b_re_s[0] - d_re_s[0], bmd_i = b_im_s[0] - d_im_s[0];
-            double jbmd_r = -bmd_i, jbmd_i = bmd_r; // forward j-multiply
+            // out0 = (apc + bpd) — no twiddle
+            __m256d o0_re = _mm256_add_pd(apc_re, bpd_re);
+            __m256d o0_im = _mm256_add_pd(apc_im, bpd_im);
 
-            // out0 = (apc + bpd)
-            double o0_r = apc_r + bpd_r, o0_i = apc_i + bpd_i;
+            // out1 = (amc - jbmd) * w1[j] — each lane has different twiddle
+            __m256d t1_re = _mm256_sub_pd(amc_re, jbmd_re);
+            __m256d t1_im = _mm256_sub_pd(amc_im, jbmd_im);
+            // Load per-j twiddles: tw[j*6+0..3] for w1_re, tw[j*6+1..3] for w1_im
+            // But twiddles are stored per-j (6 doubles each), need to gather
+            __m256d w1r = _mm256_set_pd(tw[(j+3)*6+0], tw[(j+2)*6+0], tw[(j+1)*6+0], (j==0)?1.0:tw[j*6+0]);
+            __m256d w1i = _mm256_set_pd(tw[(j+3)*6+1], tw[(j+2)*6+1], tw[(j+1)*6+1], (j==0)?0.0:tw[j*6+1]);
+            __m256d o1_re, o1_im;
+            cmul_split_avx2(t1_re, t1_im, w1r, w1i, o1_re, o1_im);
 
-            // out1 = (amc - jbmd) * w1
-            double t1_r = amc_r - jbmd_r, t1_i = amc_i - jbmd_i;
-            double o1_r, o1_i;
-            if (j == 0) { o1_r = t1_r; o1_i = t1_i; }
-            else {
-                const double *twj = tw + j * 6;
-                o1_r = t1_r * twj[0] - t1_i * twj[1];
-                o1_i = t1_i * twj[0] + t1_r * twj[1];
-            }
+            // out2 = (apc - bpd) * w2[j]
+            __m256d t2_re = _mm256_sub_pd(apc_re, bpd_re);
+            __m256d t2_im = _mm256_sub_pd(apc_im, bpd_im);
+            __m256d w2r = _mm256_set_pd(tw[(j+3)*6+2], tw[(j+2)*6+2], tw[(j+1)*6+2], (j==0)?1.0:tw[j*6+2]);
+            __m256d w2i = _mm256_set_pd(tw[(j+3)*6+3], tw[(j+2)*6+3], tw[(j+1)*6+3], (j==0)?0.0:tw[j*6+3]);
+            __m256d o2_re, o2_im;
+            cmul_split_avx2(t2_re, t2_im, w2r, w2i, o2_re, o2_im);
 
-            // out2 = (apc - bpd) * w2
-            double t2_r = apc_r - bpd_r, t2_i = apc_i - bpd_i;
-            double o2_r, o2_i;
-            if (j == 0) { o2_r = t2_r; o2_i = t2_i; }
-            else {
-                const double *twj = tw + j * 6;
-                o2_r = t2_r * twj[2] - t2_i * twj[3];
-                o2_i = t2_i * twj[2] + t2_r * twj[3];
-            }
+            // out3 = (amc + jbmd) * w3[j]
+            __m256d t3_re = _mm256_add_pd(amc_re, jbmd_re);
+            __m256d t3_im = _mm256_add_pd(amc_im, jbmd_im);
+            __m256d w3r = _mm256_set_pd(tw[(j+3)*6+4], tw[(j+2)*6+4], tw[(j+1)*6+4], (j==0)?1.0:tw[j*6+4]);
+            __m256d w3i = _mm256_set_pd(tw[(j+3)*6+5], tw[(j+2)*6+5], tw[(j+1)*6+5], (j==0)?0.0:tw[j*6+5]);
+            __m256d o3_re, o3_im;
+            cmul_split_avx2(t3_re, t3_im, w3r, w3i, o3_re, o3_im);
 
-            // out3 = (amc + jbmd) * w3
-            double t3_r = amc_r + jbmd_r, t3_i = amc_i + jbmd_i;
-            double o3_r, o3_i;
-            if (j == 0) { o3_r = t3_r; o3_i = t3_i; }
-            else {
-                const double *twj = tw + j * 6;
-                o3_r = t3_r * twj[4] - t3_i * twj[5];
-                o3_i = t3_i * twj[4] + t3_r * twj[5];
-            }
+            // 4×4 transpose: o0[j0,j1,j2,j3], o1[j0,j1,j2,j3], o2[...], o3[...]
+            // → row0[o0_j0, o1_j0, o2_j0, o3_j0], row1[o0_j1, ...], ...
+            // Using unpack + permute2f128
+            // Step 1: interleave pairs
+            __m256d t01_lo_re = _mm256_unpacklo_pd(o0_re, o1_re); // [o0_j0, o1_j0, o0_j2, o1_j2]
+            __m256d t01_hi_re = _mm256_unpackhi_pd(o0_re, o1_re); // [o0_j1, o1_j1, o0_j3, o1_j3]
+            __m256d t23_lo_re = _mm256_unpacklo_pd(o2_re, o3_re); // [o2_j0, o3_j0, o2_j2, o3_j2]
+            __m256d t23_hi_re = _mm256_unpackhi_pd(o2_re, o3_re); // [o2_j1, o3_j1, o2_j3, o3_j3]
+            // Step 2: combine 128-bit halves
+            __m256d row0_re = _mm256_permute2f128_pd(t01_lo_re, t23_lo_re, 0x20); // [o0_j0, o1_j0, o2_j0, o3_j0]
+            __m256d row1_re = _mm256_permute2f128_pd(t01_hi_re, t23_hi_re, 0x20); // [o0_j1, o1_j1, o2_j1, o3_j1]
+            __m256d row2_re = _mm256_permute2f128_pd(t01_lo_re, t23_lo_re, 0x31); // [o0_j2, o1_j2, o2_j2, o3_j2]
+            __m256d row3_re = _mm256_permute2f128_pd(t01_hi_re, t23_hi_re, 0x31); // [o0_j3, o1_j3, o2_j3, o3_j3]
 
-            // Fused twist (with 2/N scaling baked in)
-            int32_t out_base = 4 * j;
-            double tc0 = tw_cos[out_base], ts0 = tw_sin[out_base];
-            double tc1 = tw_cos[out_base+1], ts1 = tw_sin[out_base+1];
-            double tc2 = tw_cos[out_base+2], ts2 = tw_sin[out_base+2];
-            double tc3 = tw_cos[out_base+3], ts3 = tw_sin[out_base+3];
+            // Same for imaginary
+            __m256d t01_lo_im = _mm256_unpacklo_pd(o0_im, o1_im);
+            __m256d t01_hi_im = _mm256_unpackhi_pd(o0_im, o1_im);
+            __m256d t23_lo_im = _mm256_unpacklo_pd(o2_im, o3_im);
+            __m256d t23_hi_im = _mm256_unpackhi_pd(o2_im, o3_im);
+            __m256d row0_im = _mm256_permute2f128_pd(t01_lo_im, t23_lo_im, 0x20);
+            __m256d row1_im = _mm256_permute2f128_pd(t01_hi_im, t23_hi_im, 0x20);
+            __m256d row2_im = _mm256_permute2f128_pd(t01_lo_im, t23_lo_im, 0x31);
+            __m256d row3_im = _mm256_permute2f128_pd(t01_hi_im, t23_hi_im, 0x31);
 
-            dst_re[out_base]   = o0_r * tc0 - o0_i * ts0;
-            dst_im[out_base]   = o0_i * tc0 + o0_r * ts0;
-            dst_re[out_base+1] = o1_r * tc1 - o1_i * ts1;
-            dst_im[out_base+1] = o1_i * tc1 + o1_r * ts1;
-            dst_re[out_base+2] = o2_r * tc2 - o2_i * ts2;
-            dst_im[out_base+2] = o2_i * tc2 + o2_r * ts2;
-            dst_re[out_base+3] = o3_r * tc3 - o3_i * ts3;
-            dst_im[out_base+3] = o3_i * tc3 + o3_r * ts3;
+            // Apply fused twist (with 2/N scaling) — 4 contiguous outputs per row
+            int32_t ob = 4 * j;
+            __m256d tc, ts, tr, ti;
+
+            tc = _mm256_loadu_pd(tw_cos + ob); ts = _mm256_loadu_pd(tw_sin + ob);
+            cmul_split_avx2(row0_re, row0_im, tc, ts, tr, ti);
+            _mm256_storeu_pd(dst_re + ob, tr); _mm256_storeu_pd(dst_im + ob, ti);
+
+            tc = _mm256_loadu_pd(tw_cos + ob + 4); ts = _mm256_loadu_pd(tw_sin + ob + 4);
+            cmul_split_avx2(row1_re, row1_im, tc, ts, tr, ti);
+            _mm256_storeu_pd(dst_re + ob + 4, tr); _mm256_storeu_pd(dst_im + ob + 4, ti);
+
+            tc = _mm256_loadu_pd(tw_cos + ob + 8); ts = _mm256_loadu_pd(tw_sin + ob + 8);
+            cmul_split_avx2(row2_re, row2_im, tc, ts, tr, ti);
+            _mm256_storeu_pd(dst_re + ob + 8, tr); _mm256_storeu_pd(dst_im + ob + 8, ti);
+
+            tc = _mm256_loadu_pd(tw_cos + ob + 12); ts = _mm256_loadu_pd(tw_sin + ob + 12);
+            cmul_split_avx2(row3_re, row3_im, tc, ts, tr, ti);
+            _mm256_storeu_pd(dst_re + ob + 12, tr); _mm256_storeu_pd(dst_im + ob + 12, ti);
         }
     }
 
