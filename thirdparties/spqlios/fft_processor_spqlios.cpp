@@ -97,22 +97,18 @@ void FFT_Processor_Spqlios::execute_reverse_int(double *res, const int32_t *a) {
             : "%ymm0", "%zmm1", "memory"
         );
         #else
-        // Unrolled 2x: convert 8 int32 → 8 doubles per iteration
         __asm__ __volatile__ (
         "0:\n"
                 "vmovupd (%1),%%xmm0\n"
-                "vmovupd 16(%1),%%xmm2\n"
                 "vcvtdq2pd %%xmm0,%%ymm1\n"
-                "vcvtdq2pd %%xmm2,%%ymm3\n"
                 "vmovapd %%ymm1,(%0)\n"
-                "vmovapd %%ymm3,32(%0)\n"
-                "addq $32,%1\n"
-                "addq $64,%0\n"
+                "addq $16,%1\n"
+                "addq $32,%0\n"
                 "cmpq %2,%1\n"
                 "jb 0b\n"
         : "=r"(dst), "=r"(ait), "=r"(aend)
         : "0"(dst), "1"(ait), "2"(aend)
-        : "%xmm0", "%ymm1", "%xmm2", "%ymm3", "memory"
+        : "%xmm0", "%ymm1", "memory"
         );
         #endif
     }
@@ -125,37 +121,19 @@ void FFT_Processor_Spqlios::execute_reverse_torus32(double *res, const uint32_t 
 }
 
 void FFT_Processor_Spqlios::execute_reverse_torus64(double* res, const uint64_t* a) {
-    #ifdef USE_AVX512
-    for (size_t i = 0; i < N / 8; i++) {
-        const __m512i vi =
-            _mm512_loadu_si512(reinterpret_cast<const __m512i *>(a + i * 8));
-        const __m512d vd = _mm512_cvtepi64_pd(vi);
-        _mm512_storeu_pd(res + i * 8, vd);
-    }
-    #else
     const int64_t *aa = (const int64_t *)a;
     for (int i=0; i<N; i+=4) {
         __m256i vi = _mm256_loadu_si256((const __m256i*)(aa + i));
         __m256d vd = SPQLIOS::mm256_cvtepi64_pd(vi);
         _mm256_storeu_pd(res + i, vd);
     }
-    #endif
     ifft(tables_reverse,res);
 }
 
 void FFT_Processor_Spqlios::execute_reverse_torus64_uint(
     double *res, const uint64_t *a)
 {
-#ifdef USE_AVX512
-    for (size_t i = 0; i < N / 8; i++) {
-        const __m512i vi =
-            _mm512_loadu_si512(reinterpret_cast<const __m512i *>(a + i * 8));
-        const __m512d vd = _mm512_cvtepi64_pd(vi);
-        _mm512_storeu_pd(res + i * 8, vd);
-    }
-#else
     for (int i = 0; i < N; i++) res[i] = static_cast<double>(a[i]);
-#endif
     ifft(tables_reverse, res);
 }
 
@@ -184,23 +162,19 @@ void FFT_Processor_Spqlios::execute_direct_torus32(uint32_t *res, const double *
             : "%zmm0", "%zmm2", "memory"
         );
         #else
-        // Unrolled 2x: process 8 doubles per iteration
         __asm__ __volatile__ (
         "vbroadcastsd (%3),%%ymm2\n"
                 "1:\n"
                 "vmovupd (%1),%%ymm0\n"
-                "vmovupd 32(%1),%%ymm1\n"
                 "vmulpd	%%ymm2,%%ymm0,%%ymm0\n"
-                "vmulpd	%%ymm2,%%ymm1,%%ymm1\n"
                 "vmovapd %%ymm0,(%0)\n"
-                "vmovapd %%ymm1,32(%0)\n"
-                "addq $64,%1\n"
-                "addq $64,%0\n"
+                "addq $32,%1\n"
+                "addq $32,%0\n"
                 "cmpq %2,%1\n"
                 "jb 1b\n"
         : "=r"(dst), "=r"(sit), "=r"(send), "=r"(bla)
         : "0"(dst), "1"(sit), "2"(send), "3"(bla)
-        : "%ymm0", "%ymm1", "%ymm2", "memory"
+        : "%ymm0", "%ymm2", "memory"
         );
         #endif
     }
@@ -401,25 +375,6 @@ void FFT_Processor_Spqlios::execute_direct_torus64(uint64_t* res, double* a) {
     static const double _2sN = double(2)/double(N);
     // Scale a in-place by 2/N, then FFT directly on a — no copy to real_inout_direct.
     // Callers pass an alignas(64) PolynomialInFD so aligned loads/stores are safe.
-    #ifdef USE_AVX512
-    {
-        const __m512d vscale = _mm512_set1_pd(_2sN);
-        for (size_t i = 0; i < (size_t)N / 8; i++) {
-            __m512d v = _mm512_load_pd(a + i * 8);
-            _mm512_store_pd(a + i * 8, _mm512_mul_pd(v, vscale));
-        }
-    }
-    fft(tables_direct, a);
-    const __m512d modc = {64, 64, 64, 64, 64, 64, 64, 64};
-    for (size_t i = 0; i < (size_t)N / 8; i++) {
-        const __m512d v = _mm512_loadu_pd(a + i * 8);
-        const __m512d v1 = _mm512_scalef_pd(v, -modc);
-        const __m512d v2 = _mm512_reduce_pd(v1, 0);
-        const __m512d v3 = _mm512_scalef_pd(v2, modc);
-        const __m512i out = _mm512_cvtpd_epi64(v3);
-        _mm512_storeu_si512(reinterpret_cast<__m512i *>(res + i * 8), out);
-    }
-    #else
     {
         const __m256d vscale = _mm256_set1_pd(_2sN);
         for (int i = 0; i < N; i += 4) {
@@ -428,38 +383,23 @@ void FFT_Processor_Spqlios::execute_direct_torus64(uint64_t* res, double* a) {
         }
     }
     fft(tables_direct, a);
-    for (int i = 0; i < N; i += 4) {
-        __m256d v = _mm256_loadu_pd(a + i);
-        __m256i vi = SPQLIOS::mm256_cvtpd_epi64(v);
-        _mm256_storeu_si256((__m256i*)(res + i), vi);
+    {
+        const uint64_t* const vals = (const uint64_t*) a;
+        static const uint64_t valmask0 = 0x000FFFFFFFFFFFFFul;
+        static const uint64_t valmask1 = 0x0010000000000000ul;
+        static const uint16_t expmask0 = 0x07FFu;
+        for (int i = 0; i < N; i++) {
+            uint64_t val = (vals[i]&valmask0)|valmask1; //mantissa on 53 bits
+            uint16_t expo = (vals[i]>>52)&expmask0; //exponent 11 bits
+            int16_t trans = expo-1075;
+            uint64_t val2 = trans>0?(val<<trans):(val>>-trans);
+            res[i]=(vals[i]>>63)?-val2:val2;
+        }
     }
-    #endif
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus64_add(uint64_t* res, double* a) {
     static const double _2sN = double(2)/double(N);
-    #ifdef USE_AVX512
-    {
-        const __m512d vscale = _mm512_set1_pd(_2sN);
-        for (size_t i = 0; i < (size_t)N / 8; i++) {
-            __m512d v = _mm512_load_pd(a + i * 8);
-            _mm512_store_pd(a + i * 8, _mm512_mul_pd(v, vscale));
-        }
-    }
-    fft(tables_direct, a);
-    const __m512d modc = {64, 64, 64, 64, 64, 64, 64, 64};
-    for (size_t i = 0; i < (size_t)N / 8; i++) {
-        const __m512d v = _mm512_loadu_pd(a + i * 8);
-        const __m512d v1 = _mm512_scalef_pd(v, -modc);
-        const __m512d v2 = _mm512_reduce_pd(v1, 0);
-        const __m512d v3 = _mm512_scalef_pd(v2, modc);
-        const __m512i add = _mm512_cvtpd_epi64(v3);
-        const __m512i cur = _mm512_loadu_si512(
-            reinterpret_cast<const __m512i *>(res + i * 8));
-        const __m512i out = _mm512_add_epi64(cur, add);
-        _mm512_storeu_si512(reinterpret_cast<__m512i *>(res + i * 8), out);
-    }
-    #else
     {
         const __m256d vscale = _mm256_set1_pd(_2sN);
         for (int i = 0; i < N; i += 4) {
@@ -468,13 +408,19 @@ void FFT_Processor_Spqlios::execute_direct_torus64_add(uint64_t* res, double* a)
         }
     }
     fft(tables_direct, a);
-    for (int i = 0; i < N; i += 4) {
-        __m256d v = _mm256_loadu_pd(a + i);
-        __m256i vi = SPQLIOS::mm256_cvtpd_epi64(v);
-        __m256i cur = _mm256_loadu_si256((const __m256i*)(res + i));
-        _mm256_storeu_si256((__m256i*)(res + i), _mm256_add_epi64(cur, vi));
+    {
+        const uint64_t* const vals = (const uint64_t*) a;
+        static const uint64_t valmask0 = 0x000FFFFFFFFFFFFFul;
+        static const uint64_t valmask1 = 0x0010000000000000ul;
+        static const uint16_t expmask0 = 0x07FFu;
+        for (int i = 0; i < N; i++) {
+            uint64_t val = (vals[i]&valmask0)|valmask1;
+            uint16_t expo = (vals[i]>>52)&expmask0;
+            int16_t trans = expo-1075;
+            uint64_t val2 = trans>0?(val<<trans):(val>>-trans);
+            res[i] += (vals[i]>>63)?-val2:val2;
+        }
     }
-    #endif
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus64_rescale(uint64_t* res, const double* a, const double Δ) {
@@ -531,37 +477,60 @@ void FFT_Processor_Spqlios::execute_direct_torus64_rescale_clpx(
     }
     fft(tables_direct, real_inout_direct);
 #ifdef USE_AVX512
-    const __m512d modc = {64, 64, 64, 64, 64, 64, 64, 64};
-    for (size_t i = 0; i < N / 8; i++) {
-        const __m512d v = _mm512_loadu_pd(real_inout_direct + i * 8);
-        const __m512d v1 = _mm512_scalef_pd(v, -modc);
-        const __m512d v2 = _mm512_reduce_pd(v1, 0);
-        const __m512d v3 = _mm512_scalef_pd(v2, modc);
-        const __m512i out = _mm512_cvtpd_epi64(v3);
-        _mm512_storeu_si512(reinterpret_cast<__m512i *>(res + i * 8), out);
+    const uint64_t *vals = (const uint64_t *) real_inout_direct;
+    static const uint64_t valmask0 = 0x000FFFFFFFFFFFFFul;
+    static const uint64_t valmask1 = 0x0010000000000000ul;
+    static const uint16_t expmask0 = 0x07FFu;
+    for (int i = 0; i < N; i++) {
+        uint32_t prev = (i == 0) ? N - 1 : i - 1;
+
+        uint64_t val_prev = (vals[prev] & valmask0) | valmask1;
+        uint16_t exp_prev = (vals[prev] >> 52) & expmask0;
+        int16_t shift_prev = exp_prev - 1075 - 63;
+        uint64_t scaled_prev =
+            shift_prev > 0 ? (val_prev << shift_prev) : (val_prev >> -shift_prev);
+
+        uint64_t val_cur = (vals[i] & valmask0) | valmask1;
+        uint16_t exp_cur = (vals[i] >> 52) & expmask0;
+        int16_t shift_cur = exp_cur - 1075 - 63;
+        val_cur *= plain_modulus;
+        uint64_t scaled_cur =
+            shift_cur > 0 ? (val_cur << shift_cur) : (val_cur >> -shift_cur);
+
+        if (i == 0)
+            res[i] = -((vals[prev] >> 63) ? -scaled_prev : scaled_prev) -
+                     ((vals[i] >> 63) ? -scaled_cur : scaled_cur);
+        else
+            res[i] = ((vals[prev] >> 63) ? -scaled_prev : scaled_prev) -
+                     ((vals[i] >> 63) ? -scaled_cur : scaled_cur);
     }
 #else
-    // Convert doubles to int64 using magic constant trick, then apply CLPX formula
-    // First convert all values to int64
-    alignas(32) int64_t ival[N];
-    for (int i = 0; i < N; i += 4) {
-        __m256d v = _mm256_loadu_pd(real_inout_direct + i);
-        __m256i vi = SPQLIOS::mm256_cvtpd_epi64(v);
-        _mm256_store_si256((__m256i*)(ival + i), vi);
-    }
-    // Apply CLPX formula: res[0] = -(ival[N-1] >> 63) - ival[0]*plain_modulus >> 63
-    // res[i] = (ival[i-1] >> 63) - ival[i]*plain_modulus >> 63  for i > 0
-    // Using integer shifts to emulate the original division-by-2^63 logic
+    const uint64_t *vals = (const uint64_t *) real_inout_direct;
+    static const uint64_t valmask0 = 0x000FFFFFFFFFFFFFul;
+    static const uint64_t valmask1 = 0x0010000000000000ul;
+    static const uint16_t expmask0 = 0x07FFu;
     for (int i = 0; i < N; i++) {
-        int64_t prev_val = ival[(i == 0) ? N - 1 : i - 1];
-        int64_t cur_val = ival[i] * (int64_t)plain_modulus;
-        // Both values need to be divided by 2^63 (i.e., take the high part)
-        // For the torus representation, we just keep the raw int64 values
-        // and let uint64 wrapping handle the modular arithmetic
+        uint32_t prev = (i == 0) ? N - 1 : i - 1;
+
+        uint64_t val_prev = (vals[prev] & valmask0) | valmask1;
+        uint16_t exp_prev = (vals[prev] >> 52) & expmask0;
+        int16_t shift_prev = exp_prev - 1075 - 63;
+        uint64_t scaled_prev =
+            shift_prev > 0 ? (val_prev << shift_prev) : (val_prev >> -shift_prev);
+
+        uint64_t val_cur = (vals[i] & valmask0) | valmask1;
+        uint16_t exp_cur = (vals[i] >> 52) & expmask0;
+        int16_t shift_cur = exp_cur - 1075 - 63;
+        val_cur *= plain_modulus;
+        uint64_t scaled_cur =
+            shift_cur > 0 ? (val_cur << shift_cur) : (val_cur >> -shift_cur);
+
         if (i == 0)
-            res[i] = static_cast<uint64_t>(-prev_val - cur_val);
+            res[i] = -((vals[prev] >> 63) ? -scaled_prev : scaled_prev) -
+                     ((vals[i] >> 63) ? -scaled_cur : scaled_cur);
         else
-            res[i] = static_cast<uint64_t>(prev_val - cur_val);
+            res[i] = ((vals[prev] >> 63) ? -scaled_prev : scaled_prev) -
+                     ((vals[i] >> 63) ? -scaled_cur : scaled_cur);
     }
 #endif
 }

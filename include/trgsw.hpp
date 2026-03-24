@@ -155,55 +155,6 @@ inline void DecompositionImpl(DecPolyType &decpoly, const Polynomial<P> &poly)
     constexpr typename P::T halfBg =
         static_cast<typename P::T>(1) << (D::Bgbit - 1);
 
-#if defined(__AVX2__) && !defined(USE_AVX512)
-    // AVX2 vectorized path for uint32_t with l̅=1 (the common case)
-    if constexpr (std::is_same_v<typename P::T, uint32_t> && D::l̅ == 1) {
-        const __m256i voffset = _mm256_set1_epi32(
-            static_cast<int32_t>(offset + roundoffset));
-        const __m256i vmask = _mm256_set1_epi32(static_cast<int32_t>(maskBg));
-        const __m256i vhalf = _mm256_set1_epi32(static_cast<int32_t>(halfBg));
-        for (int i = 0; i < D::l; i++) {
-            const int shift = std::numeric_limits<uint32_t>::digits -
-                              (i + 1) * D::Bgbit;
-            const __m128i vshift = _mm_cvtsi32_si128(shift);
-            for (int n = 0; n < P::n; n += 8) {
-                __m256i va = _mm256_loadu_si256(
-                    reinterpret_cast<const __m256i *>(poly.data() + n));
-                va = _mm256_add_epi32(va, voffset);
-                va = _mm256_srl_epi32(va, vshift);
-                va = _mm256_and_si256(va, vmask);
-                va = _mm256_sub_epi32(va, vhalf);
-                _mm256_storeu_si256(
-                    reinterpret_cast<__m256i *>(&decpoly[i][n]), va);
-            }
-        }
-        return;
-    }
-    // AVX2 vectorized path for uint64_t with l̅=1
-    if constexpr (std::is_same_v<typename P::T, uint64_t> && D::l̅ == 1) {
-        const __m256i voffset = _mm256_set1_epi64x(
-            static_cast<int64_t>(offset + roundoffset));
-        const __m256i vmask = _mm256_set1_epi64x(static_cast<int64_t>(maskBg));
-        const __m256i vhalf = _mm256_set1_epi64x(static_cast<int64_t>(halfBg));
-        for (int i = 0; i < D::l; i++) {
-            const int shift = std::numeric_limits<uint64_t>::digits -
-                              (i + 1) * D::Bgbit;
-            const __m128i vshift = _mm_cvtsi32_si128(shift);
-            for (int n = 0; n < P::n; n += 4) {
-                __m256i va = _mm256_loadu_si256(
-                    reinterpret_cast<const __m256i *>(poly.data() + n));
-                va = _mm256_add_epi64(va, voffset);
-                va = _mm256_srl_epi64(va, vshift);
-                va = _mm256_and_si256(va, vmask);
-                va = _mm256_sub_epi64(va, vhalf);
-                _mm256_storeu_si256(
-                    reinterpret_cast<__m256i *>(&decpoly[i][n]), va);
-            }
-        }
-        return;
-    }
-#endif
-
     for (int n = 0; n < P::n; n++) {
         typename P::T a = poly[n] + offset + roundoffset;
         for (int i = 0; i < D::l; i++) {

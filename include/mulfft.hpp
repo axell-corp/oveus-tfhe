@@ -219,18 +219,7 @@ inline void TwistIFFTUInt(PolynomialInFD<P> &res, const Polynomial<P> &a)
 template <uint32_t N>
 inline void MulInFD(std::array<double, N> &res, const std::array<double, N> &b)
 {
-#if defined(USE_INTERLEAVED_FORMAT) && defined(__AVX2__)
-    // AVX2 interleaved complex multiply: 2 complex per YMM
-    for (uint32_t i = 0; i < N; i += 4) {
-        __m256d a = _mm256_load_pd(res.data() + i);
-        __m256d w = _mm256_load_pd(b.data() + i);
-        __m256d w_swap = _mm256_permute_pd(w, 0b0101);
-        __m256d a_re = _mm256_unpacklo_pd(a, a);
-        __m256d a_im = _mm256_unpackhi_pd(a, a);
-        _mm256_store_pd(res.data() + i,
-            _mm256_fmaddsub_pd(a_re, w, _mm256_mul_pd(a_im, w_swap)));
-    }
-#elif defined(USE_INTERLEAVED_FORMAT)
+#ifdef USE_INTERLEAVED_FORMAT
     for (int i = 0; i < N / 2; i++) {
         const std::complex tmp = std::complex(res[2 * i], res[2 * i + 1]) *
                                  std::complex(b[2 * i], b[2 * i + 1]);
@@ -256,27 +245,17 @@ inline void MulInFD(std::array<double, N> &res, const std::array<double, N> &b)
 #elif defined(__AVX2__) && !defined(__AVX512F__)
     double *rre = res.data(), *rim = res.data() + N / 2;
     const double *bre = b.data(), *bim = b.data() + N / 2;
-    for (uint32_t i = 0; i < N / 2; i += 8) {
-        __m256d va_re0 = _mm256_load_pd(rre + i);
-        __m256d va_im0 = _mm256_load_pd(rim + i);
-        __m256d vb_re0 = _mm256_load_pd(bre + i);
-        __m256d vb_im0 = _mm256_load_pd(bim + i);
-        __m256d va_re1 = _mm256_load_pd(rre + i + 4);
-        __m256d va_im1 = _mm256_load_pd(rim + i + 4);
-        __m256d vb_re1 = _mm256_load_pd(bre + i + 4);
-        __m256d vb_im1 = _mm256_load_pd(bim + i + 4);
-        __m256d vr_re0 = _mm256_mul_pd(va_re0, vb_re0);
-        __m256d vr_re1 = _mm256_mul_pd(va_re1, vb_re1);
-        vr_re0 = _mm256_fnmadd_pd(va_im0, vb_im0, vr_re0);
-        vr_re1 = _mm256_fnmadd_pd(va_im1, vb_im1, vr_re1);
-        __m256d vr_im0 = _mm256_mul_pd(va_im0, vb_re0);
-        __m256d vr_im1 = _mm256_mul_pd(va_im1, vb_re1);
-        vr_im0 = _mm256_fmadd_pd(va_re0, vb_im0, vr_im0);
-        vr_im1 = _mm256_fmadd_pd(va_re1, vb_im1, vr_im1);
-        _mm256_store_pd(rre + i, vr_re0);
-        _mm256_store_pd(rre + i + 4, vr_re1);
-        _mm256_store_pd(rim + i, vr_im0);
-        _mm256_store_pd(rim + i + 4, vr_im1);
+    for (uint32_t i = 0; i < N / 2; i += 4) {
+        __m256d va_re = _mm256_load_pd(rre + i);
+        __m256d va_im = _mm256_load_pd(rim + i);
+        __m256d vb_re = _mm256_load_pd(bre + i);
+        __m256d vb_im = _mm256_load_pd(bim + i);
+        __m256d vr_re = _mm256_mul_pd(va_re, vb_re);
+        vr_re = _mm256_fnmadd_pd(va_im, vb_im, vr_re);
+        __m256d vr_im = _mm256_mul_pd(va_im, vb_re);
+        vr_im = _mm256_fmadd_pd(va_re, vb_im, vr_im);
+        _mm256_store_pd(rre + i, vr_re);
+        _mm256_store_pd(rim + i, vr_im);
     }
 #else
     for (int i = 0; i < N / 2; i++) {
@@ -292,17 +271,7 @@ template <uint32_t N>
 inline void MulInFD(std::array<double, N> &res, const std::array<double, N> &a,
                     const std::array<double, N> &b)
 {
-#if defined(USE_INTERLEAVED_FORMAT) && defined(__AVX2__)
-    for (uint32_t i = 0; i < N; i += 4) {
-        __m256d va = _mm256_load_pd(a.data() + i);
-        __m256d w = _mm256_load_pd(b.data() + i);
-        __m256d w_swap = _mm256_permute_pd(w, 0b0101);
-        __m256d a_re = _mm256_unpacklo_pd(va, va);
-        __m256d a_im = _mm256_unpackhi_pd(va, va);
-        _mm256_store_pd(res.data() + i,
-            _mm256_fmaddsub_pd(a_re, w, _mm256_mul_pd(a_im, w_swap)));
-    }
-#elif defined(USE_INTERLEAVED_FORMAT)
+#ifdef USE_INTERLEAVED_FORMAT
     for (int i = 0; i < N / 2; i++) {
         const std::complex tmp = std::complex(a[2 * i], a[2 * i + 1]) *
                                  std::complex(b[2 * i], b[2 * i + 1]);
@@ -330,27 +299,17 @@ inline void MulInFD(std::array<double, N> &res, const std::array<double, N> &a,
     const double *are = a.data(), *aim = a.data() + N / 2;
     const double *bre = b.data(), *bim = b.data() + N / 2;
     double *rre = res.data(), *rim = res.data() + N / 2;
-    for (uint32_t i = 0; i < N / 2; i += 8) {
-        __m256d va_re0 = _mm256_load_pd(are + i);
-        __m256d va_im0 = _mm256_load_pd(aim + i);
-        __m256d vb_re0 = _mm256_load_pd(bre + i);
-        __m256d vb_im0 = _mm256_load_pd(bim + i);
-        __m256d va_re1 = _mm256_load_pd(are + i + 4);
-        __m256d va_im1 = _mm256_load_pd(aim + i + 4);
-        __m256d vb_re1 = _mm256_load_pd(bre + i + 4);
-        __m256d vb_im1 = _mm256_load_pd(bim + i + 4);
-        __m256d vr_re0 = _mm256_mul_pd(va_re0, vb_re0);
-        __m256d vr_re1 = _mm256_mul_pd(va_re1, vb_re1);
-        vr_re0 = _mm256_fnmadd_pd(va_im0, vb_im0, vr_re0);
-        vr_re1 = _mm256_fnmadd_pd(va_im1, vb_im1, vr_re1);
-        __m256d vr_im0 = _mm256_mul_pd(va_im0, vb_re0);
-        __m256d vr_im1 = _mm256_mul_pd(va_im1, vb_re1);
-        vr_im0 = _mm256_fmadd_pd(va_re0, vb_im0, vr_im0);
-        vr_im1 = _mm256_fmadd_pd(va_re1, vb_im1, vr_im1);
-        _mm256_store_pd(rre + i, vr_re0);
-        _mm256_store_pd(rre + i + 4, vr_re1);
-        _mm256_store_pd(rim + i, vr_im0);
-        _mm256_store_pd(rim + i + 4, vr_im1);
+    for (uint32_t i = 0; i < N / 2; i += 4) {
+        __m256d va_re = _mm256_load_pd(are + i);
+        __m256d va_im = _mm256_load_pd(aim + i);
+        __m256d vb_re = _mm256_load_pd(bre + i);
+        __m256d vb_im = _mm256_load_pd(bim + i);
+        __m256d vr_re = _mm256_mul_pd(va_re, vb_re);
+        vr_re = _mm256_fnmadd_pd(va_im, vb_im, vr_re);
+        __m256d vr_im = _mm256_mul_pd(va_im, vb_re);
+        vr_im = _mm256_fmadd_pd(va_re, vb_im, vr_im);
+        _mm256_store_pd(rre + i, vr_re);
+        _mm256_store_pd(rim + i, vr_im);
     }
 #else
     for (int i = 0; i < N / 2; i++) {
@@ -370,19 +329,7 @@ template <uint32_t N>
 inline void FMAInFD(std::array<double, N> &res, const std::array<double, N> &a,
                     const std::array<double, N> &b)
 {
-#if defined(USE_INTERLEAVED_FORMAT) && defined(__AVX2__)
-    // AVX2 interleaved complex FMA: res += a * b
-    for (uint32_t i = 0; i < N; i += 4) {
-        __m256d va = _mm256_load_pd(a.data() + i);
-        __m256d w = _mm256_load_pd(b.data() + i);
-        __m256d r = _mm256_load_pd(res.data() + i);
-        __m256d w_swap = _mm256_permute_pd(w, 0b0101);
-        __m256d a_re = _mm256_unpacklo_pd(va, va);
-        __m256d a_im = _mm256_unpackhi_pd(va, va);
-        __m256d prod = _mm256_fmaddsub_pd(a_re, w, _mm256_mul_pd(a_im, w_swap));
-        _mm256_store_pd(res.data() + i, _mm256_add_pd(r, prod));
-    }
-#elif defined(USE_INTERLEAVED_FORMAT)
+#ifdef USE_INTERLEAVED_FORMAT
     for (int i = 0; i < N / 2; i++) {
         std::complex tmp = std::complex(a[2 * i], a[2 * i + 1]) *
                            std::complex(b[2 * i], b[2 * i + 1]);
@@ -414,32 +361,19 @@ inline void FMAInFD(std::array<double, N> &res, const std::array<double, N> &a,
     const double *are = a.data(), *aim = a.data() + N / 2;
     const double *bre = b.data(), *bim = b.data() + N / 2;
     double *rre = res.data(), *rim = res.data() + N / 2;
-    // 2x unrolled to improve ILP on Zen 2 (2 FMA units)
-    for (uint32_t i = 0; i < N / 2; i += 8) {
-        __m256d va_re0 = _mm256_load_pd(are + i);
-        __m256d va_im0 = _mm256_load_pd(aim + i);
-        __m256d vb_re0 = _mm256_load_pd(bre + i);
-        __m256d vb_im0 = _mm256_load_pd(bim + i);
-        __m256d vr_re0 = _mm256_load_pd(rre + i);
-        __m256d vr_im0 = _mm256_load_pd(rim + i);
-        __m256d va_re1 = _mm256_load_pd(are + i + 4);
-        __m256d va_im1 = _mm256_load_pd(aim + i + 4);
-        __m256d vb_re1 = _mm256_load_pd(bre + i + 4);
-        __m256d vb_im1 = _mm256_load_pd(bim + i + 4);
-        __m256d vr_re1 = _mm256_load_pd(rre + i + 4);
-        __m256d vr_im1 = _mm256_load_pd(rim + i + 4);
-        vr_re0 = _mm256_fmadd_pd(va_re0, vb_re0, vr_re0);
-        vr_re1 = _mm256_fmadd_pd(va_re1, vb_re1, vr_re1);
-        vr_re0 = _mm256_fnmadd_pd(va_im0, vb_im0, vr_re0);
-        vr_re1 = _mm256_fnmadd_pd(va_im1, vb_im1, vr_re1);
-        vr_im0 = _mm256_fmadd_pd(va_im0, vb_re0, vr_im0);
-        vr_im1 = _mm256_fmadd_pd(va_im1, vb_re1, vr_im1);
-        vr_im0 = _mm256_fmadd_pd(va_re0, vb_im0, vr_im0);
-        vr_im1 = _mm256_fmadd_pd(va_re1, vb_im1, vr_im1);
-        _mm256_store_pd(rre + i, vr_re0);
-        _mm256_store_pd(rre + i + 4, vr_re1);
-        _mm256_store_pd(rim + i, vr_im0);
-        _mm256_store_pd(rim + i + 4, vr_im1);
+    for (uint32_t i = 0; i < N / 2; i += 4) {
+        __m256d va_re = _mm256_load_pd(are + i);
+        __m256d va_im = _mm256_load_pd(aim + i);
+        __m256d vb_re = _mm256_load_pd(bre + i);
+        __m256d vb_im = _mm256_load_pd(bim + i);
+        __m256d vr_re = _mm256_load_pd(rre + i);
+        __m256d vr_im = _mm256_load_pd(rim + i);
+        vr_re = _mm256_fmadd_pd(va_re, vb_re, vr_re);
+        vr_re = _mm256_fnmadd_pd(va_im, vb_im, vr_re);
+        vr_im = _mm256_fmadd_pd(va_im, vb_re, vr_im);
+        vr_im = _mm256_fmadd_pd(va_re, vb_im, vr_im);
+        _mm256_store_pd(rre + i, vr_re);
+        _mm256_store_pd(rim + i, vr_im);
     }
 #else
     for (int i = 0; i < N / 2; i++) {

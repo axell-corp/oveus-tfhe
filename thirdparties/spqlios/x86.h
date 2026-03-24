@@ -20,32 +20,93 @@
 namespace SPQLIOS{
 
 // Convert a vector of f64 values to a vector of i64 values.
-// Uses the magic-constant trick: adding 3*2^51 to a double in (-2^51, 2^51)
-// places the integer value directly in the mantissa bits.
-// This is ~3 ops vs ~13 ops for the bit-twiddling version.
-// Requires |x| < 2^51 (satisfied for all practical TFHE parameters).
+// See `f64_to_i64_bit_twiddles` in `fft/tests.rs` for the scalar version.
 inline __m256i mm256_cvtpd_epi64(const __m256d x) {
-    // 3 * 2^51 = 6755399441055744.0, bit pattern 0x4338000000000000
-    const __m256d magic_d = _mm256_set1_pd(6755399441055744.0);
-    const __m256i magic_i = _mm256_set1_epi64x(0x4338000000000000LL);
-    // Add magic constant: shifts integer value into mantissa bits
-    const __m256d adjusted = _mm256_add_pd(x, magic_d);
-    // Subtract magic as integer to recover the signed integer value
-    return _mm256_sub_epi64(_mm256_castpd_si256(adjusted), magic_i);
+    // reinterpret the bits as u64 values
+    const __m256i bits = _mm256_castpd_si256(x);
+
+    // mask that covers the first 52 bits
+    const __m256i mantissa_mask = _mm256_set1_epi64x(0xFFFFFFFFFFFFF);
+
+    // mask that covers the 52nd bit
+    const __m256i explicit_mantissa_bit = _mm256_set1_epi64x(0x10000000000000);
+
+    // mask that covers the first 11 bits
+    const __m256i exp_mask = _mm256_set1_epi64x(0x7FF);
+
+    // extract the first 52 bits and add the implicit bit
+    const __m256i mantissa = _mm256_or_si256(
+        _mm256_and_si256(bits, mantissa_mask),
+        explicit_mantissa_bit
+    );
+
+    // extract the 52nd to 63rd (excluded) bits for the biased exponent
+    const __m256i biased_exp = _mm256_and_si256(_mm256_srli_epi64(bits, 52), exp_mask);
+
+    // extract the 63rd sign bit
+    const __m256i sign_is_negative_mask = _mm256_sub_epi64(
+        _mm256_setzero_si256(),
+        _mm256_srli_epi64(bits, 63)
+    );
+
+    // we need to shift the mantissa by some value that may be negative, so we first shift it to
+    // the left by the maximum amount, then shift it to the right by our value plus the offset we
+    // just shifted by
+    //
+    // the 52nd bit is set to 1, so we shift to the left by 11 so the 63rd (last) bit is set.
+    const __m256i mantissa_lshift = _mm256_slli_epi64(mantissa, 11);
+
+    // shift to the right and apply the exponent bias
+    // If biased_exp == 0 then we have 0 or a subnormal value which should return 0, here we will
+    // shift to the right by 1086 which will return 0 as we are shifting in 0s from the left, so
+    // subnormals are already covered
+    const __m256i mantissa_shift = _mm256_srlv_epi64(
+        mantissa_lshift,
+        _mm256_sub_epi64(_mm256_set1_epi64x(1086), biased_exp)
+    );
+
+    // if the sign bit is unset, we keep our result
+    const __m256i value_if_positive = mantissa_shift;
+    // otherwise, we negate it
+    const __m256i value_if_negative = _mm256_sub_epi64(_mm256_setzero_si256(), value_if_positive);
+
+    // if the biased exponent is all zeros, we have a subnormal value (or zero)
+
+    // Select the value based on the sign mask
+    return _mm256_blendv_epi8(value_if_positive, value_if_negative, sign_is_negative_mask);
 }
 
-// Convert a vector of i64 values to a vector of f64 values.
-// Uses the magic-constant trick (reverse direction): adding the magic integer
-// then reinterpreting as double and subtracting the magic double.
-// Requires |x| < 2^51 (satisfied for all practical TFHE parameters).
+// Convert a vector of i64 values to a vector of f64 values. Not sure how it works.
+// Ported from <https://stackoverflow.com/a/41148578>.
+
 inline __m256d mm256_cvtepi64_pd(const __m256i x) {
-    const __m256i magic_i = _mm256_set1_epi64x(0x4338000000000000LL);
-    const __m256d magic_d = _mm256_set1_pd(6755399441055744.0); // 3 * 2^51
-    // Add magic as integer, reinterpret as double, subtract magic as double
-    return _mm256_sub_pd(
-        _mm256_castsi256_pd(_mm256_add_epi64(x, magic_i)),
-        magic_d
+    // Shift right arithmetic by 16 bits
+    __m256i x_hi = _mm256_srai_epi32(x, 16);
+
+    // Blend lower 16 bits with zero
+    x_hi = _mm256_blend_epi16(x_hi, _mm256_setzero_si256(), 0x33);
+
+    // Add a large constant to x_hi
+    x_hi = _mm256_add_epi64(
+        x_hi,
+        _mm256_castpd_si256(_mm256_set1_pd(442721857769029238784.0)) // 3*2^67
     );
+
+    // Blend specific bits of x with a constant
+    __m256i x_lo = _mm256_blend_epi16(
+        x,
+        _mm256_castpd_si256(_mm256_set1_pd(4503599627370496.0)), // 2^52
+        0x88
+    );
+
+    // Subtract a large constant from the floating-point representation of x_hi
+    __m256d f = _mm256_sub_pd(
+        _mm256_castsi256_pd(x_hi),
+        _mm256_set1_pd(442726361368656609280.0) // 3*2^67 + 2^52
+    );
+
+    // Add the floating-point representation of x_lo to the result
+    return _mm256_add_pd(f, _mm256_castsi256_pd(x_lo));
 }
 
 // Convert a vector of i64 values to a vector of i32 values without AVX512.

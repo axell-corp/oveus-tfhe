@@ -244,7 +244,7 @@ void SubsetPrivKeySwitch(TRLWE<typename P::targetP> &res,
                 mask;
 
             if (aij != 0)
-                TRLWEAdd<typename P::targetP>(res, res, privksk[i][j][aij - 1]);
+                TRLWESub<typename P::targetP>(res, res, privksk[i][j][aij - 1]);
             // for (int p = 0; p < P::targetP::n; p++)
             // for (int k = 0; k < P::targetP::k + 1; k++)
             // res[k][p] -= privksk[i][j][aij - 1][k][p];
