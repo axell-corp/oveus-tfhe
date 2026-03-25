@@ -636,9 +636,17 @@ void FFT_Processor_Spqlios_Intl::execute_reverse_torus32(double *res, const uint
         _mm512_storeu_pd(res + 2*i + 8, _mm512_permutex2var_pd(re, idx_intl_hi, im));
     }
 #else
-    for (int32_t i = 0; i < Ns2; i++) {
-        res[2*i]     = (double)aa[i];
-        res[2*i + 1] = (double)aa[i + Ns2];
+    // AVX2: convert 4 int32 → 4 double, interleave re/im with unpack
+    for (int32_t i = 0; i < Ns2; i += 4) {
+        __m128i re_i32 = _mm_loadu_si128((const __m128i*)(aa + i));
+        __m128i im_i32 = _mm_loadu_si128((const __m128i*)(aa + i + Ns2));
+        __m256d re = _mm256_cvtepi32_pd(re_i32);
+        __m256d im = _mm256_cvtepi32_pd(im_i32);
+        // Interleave: [re0,re1,re2,re3] + [im0,im1,im2,im3] → [re0,im0,re1,im1], [re2,im2,re3,im3]
+        __m256d lo = _mm256_unpacklo_pd(re, im);  // [re0,im0,re2,im2]
+        __m256d hi = _mm256_unpackhi_pd(re, im);  // [re1,im1,re3,im3]
+        _mm256_storeu_pd(res + 2*i,     _mm256_permute2f128_pd(lo, hi, 0x20)); // [re0,im0,re1,im1]
+        _mm256_storeu_pd(res + 2*i + 4, _mm256_permute2f128_pd(lo, hi, 0x31)); // [re2,im2,re3,im3]
     }
 #endif
     intl_ifft((const INTL_FFT_PRECOMP*)tables_reverse, res);
@@ -655,9 +663,15 @@ void FFT_Processor_Spqlios_Intl::execute_reverse_int(double *res, const int32_t 
         _mm512_storeu_pd(res + 2*i + 8, _mm512_permutex2var_pd(re, idx_intl_hi, im));
     }
 #else
-    for (int32_t i = 0; i < Ns2; i++) {
-        res[2*i]     = (double)a[i];
-        res[2*i + 1] = (double)a[i + Ns2];
+    for (int32_t i = 0; i < Ns2; i += 4) {
+        __m128i re_i32 = _mm_loadu_si128((const __m128i*)(a + i));
+        __m128i im_i32 = _mm_loadu_si128((const __m128i*)(a + i + Ns2));
+        __m256d re = _mm256_cvtepi32_pd(re_i32);
+        __m256d im = _mm256_cvtepi32_pd(im_i32);
+        __m256d lo = _mm256_unpacklo_pd(re, im);
+        __m256d hi = _mm256_unpackhi_pd(re, im);
+        _mm256_storeu_pd(res + 4*i,     _mm256_permute2f128_pd(lo, hi, 0x20));
+        _mm256_storeu_pd(res + 4*i + 4, _mm256_permute2f128_pd(lo, hi, 0x31));
     }
 #endif
     intl_ifft((const INTL_FFT_PRECOMP*)tables_reverse, res);
@@ -674,9 +688,15 @@ void FFT_Processor_Spqlios_Intl::execute_reverse_uint(double *res, const uint32_
         _mm512_storeu_pd(res + 2*i + 8, _mm512_permutex2var_pd(re, idx_intl_hi, im));
     }
 #else
-    for (int32_t i = 0; i < Ns2; i++) {
-        res[2*i]     = (double)a[i];
-        res[2*i + 1] = (double)a[i + Ns2];
+    for (int32_t i = 0; i < Ns2; i += 4) {
+        __m128i re_i32 = _mm_loadu_si128((const __m128i*)(a + i));
+        __m128i im_i32 = _mm_loadu_si128((const __m128i*)(a + i + Ns2));
+        __m256d re = _mm256_cvtepi32_pd(re_i32);  // unsigned but small values, cvt signed is fine
+        __m256d im = _mm256_cvtepi32_pd(im_i32);
+        __m256d lo = _mm256_unpacklo_pd(re, im);
+        __m256d hi = _mm256_unpackhi_pd(re, im);
+        _mm256_storeu_pd(res + 4*i,     _mm256_permute2f128_pd(lo, hi, 0x20));
+        _mm256_storeu_pd(res + 4*i + 4, _mm256_permute2f128_pd(lo, hi, 0x31));
     }
 #endif
     intl_ifft((const INTL_FFT_PRECOMP*)tables_reverse, res);
@@ -716,9 +736,34 @@ void FFT_Processor_Spqlios_Intl::execute_direct_torus32(uint32_t *res, const dou
         _mm256_storeu_si256((__m256i*)(res + i + Ns2), im_i32);
     }
 #else
-    for (int32_t i = 0; i < Ns2; i++) {
-        res[i]       = (uint32_t)(int64_t)real_inout_direct[2*i];
-        res[i + Ns2] = (uint32_t)(int64_t)real_inout_direct[2*i + 1];
+    // AVX2: de-interleave [re0,im0,re1,im1,...] → split re[]+im[] with magic f64→i32
+    {
+        const __m256d magic_d = _mm256_set1_pd(6755399441055744.0);
+        const __m256i magic_i = _mm256_set1_epi64x(0x4338000000000000LL);
+        for (int32_t i = 0; i < Ns2; i += 4) {
+            __m256d v0 = _mm256_loadu_pd(real_inout_direct + 2*i);       // [re0,im0,re1,im1]
+            __m256d v1 = _mm256_loadu_pd(real_inout_direct + 2*i + 4);   // [re2,im2,re3,im3]
+            // De-interleave: extract re and im
+            __m256d re = _mm256_permute2f128_pd(
+                _mm256_unpacklo_pd(v0, v1),   // [re0,re2,re1,re3]
+                _mm256_unpacklo_pd(v0, v1), 0x20);
+            // Actually simpler: use shuffle_pd for within-lane, permute2f128 for cross-lane
+            __m256d re_raw = _mm256_shuffle_pd(v0, v1, 0b0000); // [re0,re2,re1,re3]
+            __m256d im_raw = _mm256_shuffle_pd(v0, v1, 0b1111); // [im0,im2,im1,im3]
+            re_raw = _mm256_permute4x64_pd(re_raw, 0b11011000);  // [re0,re1,re2,re3]
+            im_raw = _mm256_permute4x64_pd(im_raw, 0b11011000);  // [im0,im1,im2,im3]
+            // Magic f64→i64→i32
+            __m256i re_i64 = _mm256_sub_epi64(_mm256_castpd_si256(_mm256_add_pd(re_raw, magic_d)), magic_i);
+            __m256i im_i64 = _mm256_sub_epi64(_mm256_castpd_si256(_mm256_add_pd(im_raw, magic_d)), magic_i);
+            // Pack i64→i32: shuffle + permute
+            __m256 combined = _mm256_shuffle_ps(_mm256_castsi256_ps(re_i64),
+                                                _mm256_castsi256_ps(im_i64), _MM_SHUFFLE(2,0,2,0));
+            __m256d ordered = _mm256_permute4x64_pd(_mm256_castps_pd(combined), _MM_SHUFFLE(3,1,2,0));
+            __m128i re_i32 = _mm256_castsi256_si128(_mm256_castpd_si256(ordered));
+            __m128i im_i32 = _mm256_extracti128_si256(_mm256_castpd_si256(ordered), 1);
+            _mm_storeu_si128((__m128i*)(res + i), re_i32);
+            _mm_storeu_si128((__m128i*)(res + i + Ns2), im_i32);
+        }
     }
 #endif
 }
@@ -740,9 +785,26 @@ void FFT_Processor_Spqlios_Intl::execute_direct_torus32_add(uint32_t *res, const
         _mm256_storeu_si256((__m256i*)(res + i + Ns2), _mm256_add_epi32(old_im, im_i32));
     }
 #else
-    for (int32_t i = 0; i < Ns2; i++) {
-        res[i]       += (uint32_t)(int64_t)real_inout_direct[2*i];
-        res[i + Ns2] += (uint32_t)(int64_t)real_inout_direct[2*i + 1];
+    {
+        const __m256d magic_d = _mm256_set1_pd(6755399441055744.0);
+        const __m256i magic_i = _mm256_set1_epi64x(0x4338000000000000LL);
+        for (int32_t i = 0; i < Ns2; i += 4) {
+            __m256d v0 = _mm256_loadu_pd(real_inout_direct + 4*i);
+            __m256d v1 = _mm256_loadu_pd(real_inout_direct + 4*i + 4);
+            __m256d re_raw = _mm256_permute4x64_pd(_mm256_shuffle_pd(v0, v1, 0b0000), 0b11011000);
+            __m256d im_raw = _mm256_permute4x64_pd(_mm256_shuffle_pd(v0, v1, 0b1111), 0b11011000);
+            __m256i re_i64 = _mm256_sub_epi64(_mm256_castpd_si256(_mm256_add_pd(re_raw, magic_d)), magic_i);
+            __m256i im_i64 = _mm256_sub_epi64(_mm256_castpd_si256(_mm256_add_pd(im_raw, magic_d)), magic_i);
+            __m256 combined = _mm256_shuffle_ps(_mm256_castsi256_ps(re_i64),
+                                                _mm256_castsi256_ps(im_i64), _MM_SHUFFLE(2,0,2,0));
+            __m256d ordered = _mm256_permute4x64_pd(_mm256_castps_pd(combined), _MM_SHUFFLE(3,1,2,0));
+            __m128i re_i32 = _mm256_castsi256_si128(_mm256_castpd_si256(ordered));
+            __m128i im_i32 = _mm256_extracti128_si256(_mm256_castpd_si256(ordered), 1);
+            __m128i old_re = _mm_loadu_si128((__m128i*)(res + i));
+            __m128i old_im = _mm_loadu_si128((__m128i*)(res + i + Ns2));
+            _mm_storeu_si128((__m128i*)(res + i), _mm_add_epi32(old_re, re_i32));
+            _mm_storeu_si128((__m128i*)(res + i + Ns2), _mm_add_epi32(old_im, im_i32));
+        }
     }
 #endif
 }
