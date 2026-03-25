@@ -62,17 +62,18 @@ static inline __m512d mul_j_inv512(__m512d x) {
         _mm512_set_pd(-0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0));
 }
 
-// Radix-4 butterfly with twiddle (4 complex per ZMM)
+// Radix-4 butterfly with twiddle (4 complex per ZMM) — templated on direction
+template<bool Fwd>
 static inline void radix4_dit_butterfly512(
     __m512d a, __m512d b, __m512d c, __m512d d,
-    __m512d w1, __m512d w2, __m512d w3, bool fwd,
+    __m512d w1, __m512d w2, __m512d w3,
     __m512d &out0, __m512d &out1, __m512d &out2, __m512d &out3)
 {
     __m512d apc = _mm512_add_pd(a, c);
     __m512d amc = _mm512_sub_pd(a, c);
     __m512d bpd = _mm512_add_pd(b, d);
     __m512d bmd = _mm512_sub_pd(b, d);
-    __m512d jbmd = fwd ? mul_j_fwd512(bmd) : mul_j_inv512(bmd);
+    __m512d jbmd = Fwd ? mul_j_fwd512(bmd) : mul_j_inv512(bmd);
 
     out0 = _mm512_add_pd(apc, bpd);
     out1 = cmul512(_mm512_sub_pd(amc, jbmd), w1);
@@ -80,16 +81,17 @@ static inline void radix4_dit_butterfly512(
     out3 = cmul512(_mm512_add_pd(amc, jbmd), w3);
 }
 
-// Last radix-4 butterfly (no twiddle)
+// Last radix-4 butterfly (no twiddle) — templated on direction
+template<bool Fwd>
 static inline void radix4_last_butterfly512(
-    __m512d a, __m512d b, __m512d c, __m512d d, bool fwd,
+    __m512d a, __m512d b, __m512d c, __m512d d,
     __m512d &out0, __m512d &out1, __m512d &out2, __m512d &out3)
 {
     __m512d apc = _mm512_add_pd(a, c);
     __m512d amc = _mm512_sub_pd(a, c);
     __m512d bpd = _mm512_add_pd(b, d);
     __m512d bmd = _mm512_sub_pd(b, d);
-    __m512d jbmd = fwd ? mul_j_fwd512(bmd) : mul_j_inv512(bmd);
+    __m512d jbmd = Fwd ? mul_j_fwd512(bmd) : mul_j_inv512(bmd);
 
     out0 = _mm512_add_pd(apc, bpd);
     out1 = _mm512_sub_pd(amc, jbmd);
@@ -229,11 +231,12 @@ static const __m512i idx_deinl_re = _mm512_set_epi64(14, 12, 10, 8, 6, 4, 2, 0);
 static const __m512i idx_deinl_im = _mm512_set_epi64(15, 13, 11, 9, 7, 5, 3, 1);
 
 // ── Stockham radix-4 FFT (AVX512) ──────────────────────────────────────────
-// Each ZMM processes 4 complex values at a time.
-// src_ro: read-only initial source (may differ from x for zero-copy FFT).
-// x, y: writable work/scratch buffers.
+// Templated on direction to eliminate the runtime fwd/inv branch.
+// Hand-tuned asm inner loop: w1/w2/w3 preloaded in zmm0-2, jmask in zmm3.
+// zmm4-zmm11 used as temporaries; zmm12-zmm31 remain free for OOO scheduling.
 
-static void stockham_r4_from(int32_t ns2, bool fwd, const double *trig,
+template<bool Fwd>
+static void stockham_r4_from(int32_t ns2, const double *trig,
                              const double *src_ro, double *x, double *y) {
     const double *src = src_ro;
     double *dst = y;
@@ -241,47 +244,122 @@ static void stockham_r4_from(int32_t ns2, bool fwd, const double *trig,
     int32_t q = ns2 / 4;
     int32_t s = 1;
 
+    // j-multiply sign mask, compile-time selected:
+    //   Fwd: swap re/im then negate even (re) positions → multiply by +j
+    //   Inv: swap re/im then negate odd  (im) positions → multiply by -j
+    const __m512d jmask = Fwd ?
+        _mm512_set_pd(0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0) :
+        _mm512_set_pd(-0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0);
+
     while (q >= 4) {
         int32_t stride = q * s;
         if (s == 1) {
+            // First pass: no twiddle multiply; process 4 consecutive p values per ZMM.
             for (int32_t p = 0; p < q; p += 4) {
                 __m512d a = _mm512_loadu_pd(src + p * 2);
                 __m512d b = _mm512_loadu_pd(src + (p + stride) * 2);
                 __m512d c = _mm512_loadu_pd(src + (p + 2*stride) * 2);
                 __m512d d = _mm512_loadu_pd(src + (p + 3*stride) * 2);
                 __m512d r0, r1, r2, r3;
-                radix4_last_butterfly512(a, b, c, d, fwd, r0, r1, r2, r3);
+                radix4_last_butterfly512<Fwd>(a, b, c, d, r0, r1, r2, r3);
                 _mm512_storeu_pd(dst + p * 2, r0);
                 _mm512_storeu_pd(dst + (p + q) * 2, r1);
                 _mm512_storeu_pd(dst + (p + 2*q) * 2, r2);
                 _mm512_storeu_pd(dst + (p + 3*q) * 2, r3);
             }
         } else {
+            // Subsequent passes: preload w1/w2/w3 into zmm0-2 and jmask into zmm3,
+            // then run hand-tuned asm p-loop to guarantee no ZMM register spills.
+            int64_t stride_bytes = (int64_t)stride * 16;  // stride × 2 doubles × 8 bytes
             for (int32_t j = 0; j < s; j += 4) {
-                __m512d w1 = _mm512_loadu_pd(tw); tw += 8;
-                __m512d w2 = _mm512_loadu_pd(tw); tw += 8;
-                __m512d w3 = _mm512_loadu_pd(tw); tw += 8;
+                int64_t q_bytes = (int64_t)q * 16;  // q × 2 doubles × 8 bytes
+
+                // Preload twiddles and jmask before the p-loop.
+                // zmm0-3 clobbered; GCC will not assign C variables to them
+                // between this block and the inner asm, leaving our values intact.
+                __asm__ __volatile__ (
+                    "vmovupd    (%[tw]),   %%zmm0\n\t"  // w1: 4 complex twiddles
+                    "vmovupd  64(%[tw]),   %%zmm1\n\t"  // w2
+                    "vmovupd 128(%[tw]),   %%zmm2\n\t"  // w3
+                    "vmovapd    %[jm],     %%zmm3\n\t"  // jmask (compile-time constant)
+                    : : [tw] "r"(tw), [jm] "x"(jmask)
+                    : "zmm0","zmm1","zmm2","zmm3"
+                );
+
                 for (int32_t p = 0; p < q; p++) {
-                    int32_t idx = j + s * p;
-                    __m512d a = _mm512_loadu_pd(src + idx * 2);
-                    __m512d b = _mm512_loadu_pd(src + (idx + stride) * 2);
-                    __m512d c = _mm512_loadu_pd(src + (idx + 2*stride) * 2);
-                    __m512d d = _mm512_loadu_pd(src + (idx + 3*stride) * 2);
-                    int32_t o = p + q * (4 * j);
-                    __m512d r0, r1, r2, r3;
-                    radix4_dit_butterfly512(a, b, c, d, w1, w2, w3, fwd, r0, r1, r2, r3);
-                    _mm512_storeu_pd(dst + o * 2, r0);
-                    _mm512_storeu_pd(dst + (o + q) * 2, r1);
-                    _mm512_storeu_pd(dst + (o + 2*q) * 2, r2);
-                    _mm512_storeu_pd(dst + (o + 3*q) * 2, r3);
+                    const double *sptr = src + (int64_t)(j + s * p) * 2;
+                    double *dptr = dst + (int64_t)(p + q * (4 * j)) * 2;
+
+                    // zmm0=w1, zmm1=w2, zmm2=w3, zmm3=jmask (preserved across p-loop).
+                    // zmm4-zmm11: temporaries; zmm12-zmm31: untouched.
+                    __asm__ __volatile__ (
+                        // ── Load a, b, c, d ──────────────────────────────────
+                        "vmovupd    (%[src]),           %%zmm4\n\t"  // a
+                        "vmovupd    (%[src],%[st]),     %%zmm5\n\t"  // b
+                        "vmovupd    (%[src],%[st],2),   %%zmm6\n\t"  // c
+                        "vmovupd    (%[src],%[st3]),    %%zmm7\n\t"  // d
+
+                        // ── Radix-4 butterfly sums/diffs ─────────────────────
+                        "vaddpd     %%zmm6, %%zmm4, %%zmm8\n\t"   // apc = a+c
+                        "vsubpd     %%zmm6, %%zmm4, %%zmm9\n\t"   // amc = a-c
+                        "vaddpd     %%zmm7, %%zmm5, %%zmm10\n\t"  // bpd = b+d
+                        "vsubpd     %%zmm7, %%zmm5, %%zmm4\n\t"   // bmd = b-d  (reuse zmm4)
+                        // j-multiply: swap re/im pairs, then apply sign mask
+                        "vpermilpd  $0x55, %%zmm4, %%zmm4\n\t"
+                        "vxorpd     %%zmm3, %%zmm4, %%zmm11\n\t"  // jbmd  (zmm3=jmask)
+                        // live: apc(8), amc(9), bpd(10), jbmd(11)
+
+                        // ── out0 = apc + bpd  (store immediately) ────────────
+                        "vaddpd     %%zmm10, %%zmm8, %%zmm4\n\t"
+                        "vmovupd    %%zmm4, (%[dst])\n\t"
+
+                        // ── out2 = (apc − bpd) × w2 ──────────────────────────
+                        "vsubpd     %%zmm10, %%zmm8, %%zmm4\n\t"   // t = apc-bpd
+                        "vpermilpd  $0x55, %%zmm1, %%zmm5\n\t"     // w2_swap
+                        "vunpckhpd  %%zmm4, %%zmm4, %%zmm6\n\t"    // t_im broadcast
+                        "vunpcklpd  %%zmm4, %%zmm4, %%zmm4\n\t"    // t_re broadcast
+                        "vmulpd     %%zmm5, %%zmm6, %%zmm6\n\t"    // t_im × w2_swap
+                        "vfmaddsub231pd %%zmm1, %%zmm4, %%zmm6\n\t"// t_re×w2 ± t_im×w2_swap
+                        "vmovupd    %%zmm6, (%[dst],%[q2])\n\t"
+
+                        // ── out1 = (amc − jbmd) × w1 ─────────────────────────
+                        "vsubpd     %%zmm11, %%zmm9, %%zmm4\n\t"   // t = amc-jbmd
+                        "vpermilpd  $0x55, %%zmm0, %%zmm5\n\t"     // w1_swap
+                        "vunpckhpd  %%zmm4, %%zmm4, %%zmm6\n\t"
+                        "vunpcklpd  %%zmm4, %%zmm4, %%zmm4\n\t"
+                        "vmulpd     %%zmm5, %%zmm6, %%zmm6\n\t"
+                        "vfmaddsub231pd %%zmm0, %%zmm4, %%zmm6\n\t"
+                        "vmovupd    %%zmm6, (%[dst],%[q1])\n\t"
+
+                        // ── out3 = (amc + jbmd) × w3 ─────────────────────────
+                        "vaddpd     %%zmm11, %%zmm9, %%zmm4\n\t"
+                        "vpermilpd  $0x55, %%zmm2, %%zmm5\n\t"     // w3_swap
+                        "vunpckhpd  %%zmm4, %%zmm4, %%zmm6\n\t"
+                        "vunpcklpd  %%zmm4, %%zmm4, %%zmm4\n\t"
+                        "vmulpd     %%zmm5, %%zmm6, %%zmm6\n\t"
+                        "vfmaddsub231pd %%zmm2, %%zmm4, %%zmm6\n\t"
+                        "vmovupd    %%zmm6, (%[dst],%[q3])\n\t"
+
+                        : : [src] "r"(sptr), [dst] "r"(dptr),
+                            [st]  "r"(stride_bytes),
+                            [st3] "r"(stride_bytes * 3),
+                            [q1]  "r"(q_bytes),
+                            [q2]  "r"(2 * q_bytes),
+                            [q3]  "r"(3 * q_bytes)
+                        : "zmm4","zmm5","zmm6","zmm7",
+                          "zmm8","zmm9","zmm10","zmm11","memory"
+                    );
                 }
+                tw += 24;  // advance past this j-group (3 ZMMs × 8 doubles)
             }
         }
-        // After first pass, switch to mutable buffers
+        // Switch ping-pong buffers
         if (s == 1) { src = dst; dst = x; }
         else { const double *tmp = src; src = dst; dst = const_cast<double*>(tmp); }
         s *= 4; q /= 4;
     }
+
+    // Final q=1 or q=2 pass (no twiddle multiply)
     if (q == 1) {
         int32_t stride = s;
         for (int32_t j = 0; j < s; j += 4) {
@@ -290,7 +368,7 @@ static void stockham_r4_from(int32_t ns2, bool fwd, const double *trig,
             __m512d c = _mm512_loadu_pd(src + (j + 2*stride) * 2);
             __m512d d = _mm512_loadu_pd(src + (j + 3*stride) * 2);
             __m512d r0, r1, r2, r3;
-            radix4_last_butterfly512(a, b, c, d, fwd, r0, r1, r2, r3);
+            radix4_last_butterfly512<Fwd>(a, b, c, d, r0, r1, r2, r3);
             _mm512_storeu_pd(dst + (4*j) * 2, r0);
             _mm512_storeu_pd(dst + (4*j + 4) * 2, r1);
             _mm512_storeu_pd(dst + (4*j + 8) * 2, r2);
@@ -313,9 +391,10 @@ static void stockham_r4_from(int32_t ns2, bool fwd, const double *trig,
     if (dst != x) memcpy(x, dst, ns2 * 2 * sizeof(double));
 }
 
-// Convenience wrapper: src and work buffer are the same (in-place)
-static void stockham_r4(int32_t ns2, bool fwd, const double *trig, double *x, double *y) {
-    stockham_r4_from(ns2, fwd, trig, x, x, y);
+// Convenience wrapper: in-place (src == x)
+template<bool Fwd>
+static void stockham_r4(int32_t ns2, const double *trig, double *x, double *y) {
+    stockham_r4_from<Fwd>(ns2, trig, x, x, y);
 }
 
 #else  // AVX2
@@ -563,7 +642,7 @@ static void intl_fft_from(const INTL_FFT_PRECOMP *tables, const double *src_in,
     const double *trig = tables->trig_fwd;
 
 #ifdef USE_AVX512
-    stockham_r4_from(ns2, true, trig, src_in, c, tables->scratch);
+    stockham_r4_from<true>(ns2, trig, src_in, c, tables->scratch);
 
     const double *tw_twist = trig;
     for (int32_t s = 4; 4*s < ns2; s *= 4)
@@ -618,7 +697,7 @@ static void intl_ifft(const INTL_FFT_PRECOMP *tables, double *c) {
         _mm512_store_pd(p, cmul512(a, w));
     }
     const double *tw_bf = trig + ns2 * 2;
-    stockham_r4(ns2, false, tw_bf, c, tables->scratch);
+    stockham_r4<false>(ns2, tw_bf, c, tables->scratch);
 #else
     // AVX2: Separate twist + Stockham inverse with hand-tuned butterfly
     for (int32_t j = 0; j < ns2; j += 2) {
