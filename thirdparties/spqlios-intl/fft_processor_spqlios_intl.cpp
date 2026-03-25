@@ -330,30 +330,111 @@ static void stockham_r4_fwd_passes(int32_t ns2, const double *trig, double *x, d
     const double *tw = trig;
     int32_t q = ns2 / 4, s = 1;
 
+    // j-multiply mask for forward: [-0.0, 0.0, -0.0, 0.0] (negate re after swap)
+    const __m256d jmask_fwd = _mm256_set_pd(0.0, -0.0, 0.0, -0.0);
+
     while (q >= 4) {
         int32_t stride = q * s;
-        for (int32_t j = 0; j < s; j += 2) {
-            __m256d w1 = _mm256_loadu_pd(tw); tw += 4;
-            __m256d w2 = _mm256_loadu_pd(tw); tw += 4;
-            __m256d w3 = _mm256_loadu_pd(tw); tw += 4;
+        int64_t stride_bytes = (int64_t)stride * 16;  // *2 for interleaved, *8 for double
+
+        // j=0 pass: no twiddle multiply
+        for (int32_t p = 0; p < q; p++) {
+            int32_t idx = s * p;
+            __m256d a = _mm256_loadu_pd(src + idx * 2);
+            __m256d b = _mm256_loadu_pd(src + (idx + stride) * 2);
+            __m256d c = _mm256_loadu_pd(src + (idx + 2*stride) * 2);
+            __m256d d = _mm256_loadu_pd(src + (idx + 3*stride) * 2);
+            __m256d apc = _mm256_add_pd(a, c);
+            __m256d amc = _mm256_sub_pd(a, c);
+            __m256d bpd = _mm256_add_pd(b, d);
+            __m256d jbmd = _mm256_xor_pd(_mm256_permute_pd(_mm256_sub_pd(b, d), 0b0101), jmask_fwd);
+            int32_t o = p;
+            _mm256_storeu_pd(dst + o * 2, _mm256_add_pd(apc, bpd));
+            _mm256_storeu_pd(dst + (o + q) * 2, _mm256_sub_pd(amc, jbmd));
+            _mm256_storeu_pd(dst + (o + 2*q) * 2, _mm256_sub_pd(apc, bpd));
+            _mm256_storeu_pd(dst + (o + 3*q) * 2, _mm256_add_pd(amc, jbmd));
+        }
+
+        // j=2,4,...,s-2 pass: with twiddle. Hand-tuned asm for zero YMM spills.
+        for (int32_t j = 2; j < s; j += 2) {
+            const double *twj = tw + (j/2) * 12;  // 3 twiddles × 4 doubles per j-pair
+            int64_t q_bytes = (int64_t)q * 16;
+
+            // Preload twiddles into ymm0-2, j-mask in ymm3
+            __asm__ __volatile__ (
+                "vmovupd  (%[tw]),    %%ymm0\n\t"  // w1
+                "vmovupd 32(%[tw]),   %%ymm1\n\t"  // w2
+                "vmovupd 64(%[tw]),   %%ymm2\n\t"  // w3
+                : : [tw] "r"(twj)
+                : "ymm0","ymm1","ymm2"
+            );
+
             for (int32_t p = 0; p < q; p++) {
-                int32_t idx = j + s * p;
-                __m256d a = _mm256_loadu_pd(src + idx * 2);
-                __m256d b = _mm256_loadu_pd(src + (idx + stride) * 2);
-                __m256d c = _mm256_loadu_pd(src + (idx + 2*stride) * 2);
-                __m256d d = _mm256_loadu_pd(src + (idx + 3*stride) * 2);
-                int32_t o = p + q * (4 * j);
-                __m256d r0, r1, r2, r3;
-                if (s == 1)
-                    radix4_last_butterfly_fwd(a, b, c, d, r0, r1, r2, r3);
-                else
-                    radix4_butterfly_fwd(a, b, c, d, w1, w2, w3, r0, r1, r2, r3);
-                _mm256_storeu_pd(dst + o * 2, r0);
-                _mm256_storeu_pd(dst + (o + q) * 2, r1);
-                _mm256_storeu_pd(dst + (o + 2*q) * 2, r2);
-                _mm256_storeu_pd(dst + (o + 3*q) * 2, r3);
+                const double *sptr = src + (int64_t)(j + s * p) * 2;
+                double *dptr = dst + (int64_t)(p + q * (4 * j)) * 2;
+
+                // ymm0=w1, ymm1=w2, ymm2=w3 (preserved)
+                // ymm3=jmask (set from C variable, preserved)
+                // ymm4-15: temporaries
+                __asm__ __volatile__ (
+                    // Load a,b,c,d
+                    "vmovupd    (%[src]),          %%ymm4\n\t"  // a
+                    "vmovupd    (%[src],%[st]),     %%ymm5\n\t"  // b
+                    "vmovupd    (%[src],%[st],2),   %%ymm6\n\t"  // c
+                    "vmovupd    (%[src],%[st3]),    %%ymm7\n\t"  // d
+
+                    // Butterfly sums
+                    "vaddpd     %%ymm6, %%ymm4, %%ymm8\n\t"   // apc
+                    "vsubpd     %%ymm6, %%ymm4, %%ymm9\n\t"   // amc
+                    "vaddpd     %%ymm7, %%ymm5, %%ymm10\n\t"  // bpd
+                    "vsubpd     %%ymm7, %%ymm5, %%ymm4\n\t"   // bmd → ymm4
+                    // j-multiply fwd: swap re/im, negate re → [-im,re]
+                    "vpermilpd  $5, %%ymm4, %%ymm4\n\t"
+                    "vxorpd     %[jm], %%ymm4, %%ymm11\n\t"   // jbmd → ymm11
+                    // Live: apc(8), amc(9), bpd(10), jbmd(11)
+
+                    // out0 = apc + bpd
+                    "vaddpd     %%ymm10,%%ymm8, %%ymm4\n\t"
+                    "vmovupd    %%ymm4, (%[dst])\n\t"
+
+                    // out2 = (apc - bpd) * w2 — consumes apc,bpd
+                    "vsubpd     %%ymm10,%%ymm8, %%ymm4\n\t"   // t = apc-bpd
+                    "vpermilpd  $5, %%ymm1, %%ymm5\n\t"        // w2_swap
+                    "vunpckhpd  %%ymm4, %%ymm4, %%ymm6\n\t"   // t_im broadcast
+                    "vunpcklpd  %%ymm4, %%ymm4, %%ymm4\n\t"   // t_re broadcast
+                    "vmulpd     %%ymm5, %%ymm6, %%ymm6\n\t"   // t_im * w2_swap
+                    "vfmaddsub231pd %%ymm1, %%ymm4, %%ymm6\n\t" // t_re*w2 ± t_im*w2_swap
+                    "vmovupd    %%ymm6, (%[dst],%[q2])\n\t"
+                    // apc,bpd freed
+
+                    // out1 = (amc - jbmd) * w1
+                    "vsubpd     %%ymm11,%%ymm9, %%ymm4\n\t"   // t = amc-jbmd
+                    "vpermilpd  $5, %%ymm0, %%ymm5\n\t"        // w1_swap
+                    "vunpckhpd  %%ymm4, %%ymm4, %%ymm6\n\t"
+                    "vunpcklpd  %%ymm4, %%ymm4, %%ymm4\n\t"
+                    "vmulpd     %%ymm5, %%ymm6, %%ymm6\n\t"
+                    "vfmaddsub231pd %%ymm0, %%ymm4, %%ymm6\n\t"
+                    "vmovupd    %%ymm6, (%[dst],%[q1])\n\t"
+
+                    // out3 = (amc + jbmd) * w3
+                    "vaddpd     %%ymm11,%%ymm9, %%ymm4\n\t"   // t = amc+jbmd
+                    "vpermilpd  $5, %%ymm2, %%ymm5\n\t"        // w3_swap
+                    "vunpckhpd  %%ymm4, %%ymm4, %%ymm6\n\t"
+                    "vunpcklpd  %%ymm4, %%ymm4, %%ymm4\n\t"
+                    "vmulpd     %%ymm5, %%ymm6, %%ymm6\n\t"
+                    "vfmaddsub231pd %%ymm2, %%ymm4, %%ymm6\n\t"
+                    "vmovupd    %%ymm6, (%[dst],%[q3])\n\t"
+
+                    : : [src] "r"(sptr), [dst] "r"(dptr),
+                        [st] "r"(stride_bytes), [st3] "r"(stride_bytes*3),
+                        [q1] "r"(q_bytes), [q2] "r"(2*q_bytes), [q3] "r"(3*q_bytes),
+                        [jm] "x"(jmask_fwd)
+                    : "ymm4","ymm5","ymm6","ymm7","ymm8","ymm9","ymm10","ymm11","memory"
+                );
             }
         }
+        // Advance twiddle pointer past this pass
+        tw += (s < 2 ? 1 : s / 2) * 12;
         double *tmp = src; src = dst; dst = tmp;
         s *= 4; q /= 4;
     }
@@ -539,7 +620,7 @@ static void intl_ifft(const INTL_FFT_PRECOMP *tables, double *c) {
     const double *tw_bf = trig + ns2 * 2;
     stockham_r4(ns2, false, tw_bf, c, tables->scratch);
 #else
-    // AVX2: Separate twist + Stockham inverse (separate twist is faster)
+    // AVX2: Separate twist + Stockham inverse with hand-tuned butterfly
     for (int32_t j = 0; j < ns2; j += 2) {
         double *p = c + j * 2;
         __m256d a = _mm256_load_pd(p);
@@ -548,35 +629,93 @@ static void intl_ifft(const INTL_FFT_PRECOMP *tables, double *c) {
     }
 
     const double *tw_bf = trig + ns2 * 2;
-    // Use the forward passes infrastructure but for inverse
     double *src = c, *dst = tables->scratch;
     const double *tw = tw_bf;
     int32_t q = ns2 / 4, s = 1;
+    const __m256d jmask_inv = _mm256_set_pd(-0.0, 0.0, -0.0, 0.0); // inverse j-multiply
 
     while (q >= 4) {
         int32_t stride = q * s;
-        for (int32_t j = 0; j < s; j += 2) {
-            __m256d w1 = _mm256_loadu_pd(tw); tw += 4;
-            __m256d w2 = _mm256_loadu_pd(tw); tw += 4;
-            __m256d w3 = _mm256_loadu_pd(tw); tw += 4;
+        int64_t stride_bytes = (int64_t)stride * 16;
+
+        // j=0: no twiddle
+        for (int32_t p = 0; p < q; p++) {
+            int32_t idx = s * p;
+            __m256d va = _mm256_loadu_pd(src + idx * 2);
+            __m256d vb = _mm256_loadu_pd(src + (idx + stride) * 2);
+            __m256d vc = _mm256_loadu_pd(src + (idx + 2*stride) * 2);
+            __m256d vd = _mm256_loadu_pd(src + (idx + 3*stride) * 2);
+            __m256d apc = _mm256_add_pd(va, vc);
+            __m256d amc = _mm256_sub_pd(va, vc);
+            __m256d bpd = _mm256_add_pd(vb, vd);
+            __m256d jbmd = _mm256_xor_pd(_mm256_permute_pd(_mm256_sub_pd(vb, vd), 0b0101), jmask_inv);
+            int32_t o = p;
+            _mm256_storeu_pd(dst + o * 2, _mm256_add_pd(apc, bpd));
+            _mm256_storeu_pd(dst + (o + q) * 2, _mm256_sub_pd(amc, jbmd));
+            _mm256_storeu_pd(dst + (o + 2*q) * 2, _mm256_sub_pd(apc, bpd));
+            _mm256_storeu_pd(dst + (o + 3*q) * 2, _mm256_add_pd(amc, jbmd));
+        }
+
+        // j=2,4,...: hand-tuned asm (same structure as forward but with inv j-mask)
+        for (int32_t j = 2; j < s; j += 2) {
+            const double *twj = tw + (j/2) * 12;
+            int64_t q_bytes = (int64_t)q * 16;
+            __asm__ __volatile__ (
+                "vmovupd  (%[tw]),    %%ymm0\n\t"
+                "vmovupd 32(%[tw]),   %%ymm1\n\t"
+                "vmovupd 64(%[tw]),   %%ymm2\n\t"
+                : : [tw] "r"(twj) : "ymm0","ymm1","ymm2"
+            );
             for (int32_t p = 0; p < q; p++) {
-                int32_t idx = j + s * p;
-                __m256d va = _mm256_loadu_pd(src + idx * 2);
-                __m256d vb = _mm256_loadu_pd(src + (idx + stride) * 2);
-                __m256d vc = _mm256_loadu_pd(src + (idx + 2*stride) * 2);
-                __m256d vd = _mm256_loadu_pd(src + (idx + 3*stride) * 2);
-                int32_t o = p + q * (4 * j);
-                __m256d r0, r1, r2, r3;
-                if (s == 1)
-                    radix4_last_butterfly_inv(va, vb, vc, vd, r0, r1, r2, r3);
-                else
-                    radix4_butterfly_inv(va, vb, vc, vd, w1, w2, w3, r0, r1, r2, r3);
-                _mm256_storeu_pd(dst + o * 2, r0);
-                _mm256_storeu_pd(dst + (o + q) * 2, r1);
-                _mm256_storeu_pd(dst + (o + 2*q) * 2, r2);
-                _mm256_storeu_pd(dst + (o + 3*q) * 2, r3);
+                const double *sptr = src + (int64_t)(j + s * p) * 2;
+                double *dptr = dst + (int64_t)(p + q * (4 * j)) * 2;
+                __asm__ __volatile__ (
+                    "vmovupd    (%[src]),          %%ymm4\n\t"
+                    "vmovupd    (%[src],%[st]),     %%ymm5\n\t"
+                    "vmovupd    (%[src],%[st],2),   %%ymm6\n\t"
+                    "vmovupd    (%[src],%[st3]),    %%ymm7\n\t"
+                    "vaddpd     %%ymm6, %%ymm4, %%ymm8\n\t"
+                    "vsubpd     %%ymm6, %%ymm4, %%ymm9\n\t"
+                    "vaddpd     %%ymm7, %%ymm5, %%ymm10\n\t"
+                    "vsubpd     %%ymm7, %%ymm5, %%ymm4\n\t"
+                    "vpermilpd  $5, %%ymm4, %%ymm4\n\t"
+                    "vxorpd     %[jm], %%ymm4, %%ymm11\n\t"
+                    // out0
+                    "vaddpd     %%ymm10,%%ymm8, %%ymm4\n\t"
+                    "vmovupd    %%ymm4, (%[dst])\n\t"
+                    // out2 = (apc-bpd)*w2
+                    "vsubpd     %%ymm10,%%ymm8, %%ymm4\n\t"
+                    "vpermilpd  $5, %%ymm1, %%ymm5\n\t"
+                    "vunpckhpd  %%ymm4, %%ymm4, %%ymm6\n\t"
+                    "vunpcklpd  %%ymm4, %%ymm4, %%ymm4\n\t"
+                    "vmulpd     %%ymm5, %%ymm6, %%ymm6\n\t"
+                    "vfmaddsub231pd %%ymm1, %%ymm4, %%ymm6\n\t"
+                    "vmovupd    %%ymm6, (%[dst],%[q2])\n\t"
+                    // out1 = (amc-jbmd)*w1
+                    "vsubpd     %%ymm11,%%ymm9, %%ymm4\n\t"
+                    "vpermilpd  $5, %%ymm0, %%ymm5\n\t"
+                    "vunpckhpd  %%ymm4, %%ymm4, %%ymm6\n\t"
+                    "vunpcklpd  %%ymm4, %%ymm4, %%ymm4\n\t"
+                    "vmulpd     %%ymm5, %%ymm6, %%ymm6\n\t"
+                    "vfmaddsub231pd %%ymm0, %%ymm4, %%ymm6\n\t"
+                    "vmovupd    %%ymm6, (%[dst],%[q1])\n\t"
+                    // out3 = (amc+jbmd)*w3
+                    "vaddpd     %%ymm11,%%ymm9, %%ymm4\n\t"
+                    "vpermilpd  $5, %%ymm2, %%ymm5\n\t"
+                    "vunpckhpd  %%ymm4, %%ymm4, %%ymm6\n\t"
+                    "vunpcklpd  %%ymm4, %%ymm4, %%ymm4\n\t"
+                    "vmulpd     %%ymm5, %%ymm6, %%ymm6\n\t"
+                    "vfmaddsub231pd %%ymm2, %%ymm4, %%ymm6\n\t"
+                    "vmovupd    %%ymm6, (%[dst],%[q3])\n\t"
+                    : : [src] "r"(sptr), [dst] "r"(dptr),
+                        [st] "r"(stride_bytes), [st3] "r"(stride_bytes*3),
+                        [q1] "r"(q_bytes), [q2] "r"(2*q_bytes), [q3] "r"(3*q_bytes),
+                        [jm] "x"(jmask_inv)
+                    : "ymm4","ymm5","ymm6","ymm7","ymm8","ymm9","ymm10","ymm11","memory"
+                );
             }
         }
+        tw += (s < 2 ? 1 : s / 2) * 12;
         double *tmp = src; src = dst; dst = tmp;
         s *= 4; q /= 4;
     }
