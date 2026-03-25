@@ -216,16 +216,46 @@ inline void TwistIFFTUInt(PolynomialInFD<P> &res, const Polynomial<P> &a)
         static_assert(false_v<typename P::T>, "Undefined TwistIFFT!");
 }
 
+// AVX2 interleaved complex multiply: [re0,im0,re1,im1] × [re0,im0,re1,im1]
+// Uses vfmaddsub: 3 FMA instructions per 2 complex values (vs 4 for split format).
+#if defined(__AVX2__) && defined(USE_INTERLEAVED_FORMAT)
+static inline void cmul_intl_avx2(
+    double *dst, const double *a, const double *b, uint32_t N)
+{
+    for (uint32_t i = 0; i < N; i += 4) {
+        __m256d va = _mm256_loadu_pd(a + i);
+        __m256d vb = _mm256_loadu_pd(b + i);
+        __m256d vb_swap = _mm256_permute_pd(vb, 0b0101); // [im,re,im,re]
+        __m256d va_re = _mm256_unpacklo_pd(va, va);       // [re,re,re,re]
+        __m256d va_im = _mm256_unpackhi_pd(va, va);       // [im,im,im,im]
+        __m256d tmp = _mm256_mul_pd(va_im, vb_swap);      // [im*im, im*re, im*im, im*re]
+        __m256d res = _mm256_fmaddsub_pd(va_re, vb, tmp); // [re*re-im*im, re*im+im*re, ...]
+        _mm256_storeu_pd(dst + i, res);
+    }
+}
+
+static inline void cmul_acc_intl_avx2(
+    double *dst, const double *a, const double *b, uint32_t N)
+{
+    for (uint32_t i = 0; i < N; i += 4) {
+        __m256d va = _mm256_loadu_pd(a + i);
+        __m256d vb = _mm256_loadu_pd(b + i);
+        __m256d vb_swap = _mm256_permute_pd(vb, 0b0101);
+        __m256d va_re = _mm256_unpacklo_pd(va, va);
+        __m256d va_im = _mm256_unpackhi_pd(va, va);
+        __m256d tmp = _mm256_mul_pd(va_im, vb_swap);
+        __m256d prod = _mm256_fmaddsub_pd(va_re, vb, tmp);
+        __m256d prev = _mm256_loadu_pd(dst + i);
+        _mm256_storeu_pd(dst + i, _mm256_add_pd(prev, prod));
+    }
+}
+#endif
+
 template <uint32_t N>
 inline void MulInFD(std::array<double, N> &res, const std::array<double, N> &b)
 {
-#ifdef USE_INTERLEAVED_FORMAT
-    for (int i = 0; i < N / 2; i++) {
-        const std::complex tmp = std::complex(res[2 * i], res[2 * i + 1]) *
-                                 std::complex(b[2 * i], b[2 * i + 1]);
-        res[2 * i] = tmp.real();
-        res[2 * i + 1] = tmp.imag();
-    }
+#if defined(USE_INTERLEAVED_FORMAT) && defined(__AVX2__)
+    cmul_intl_avx2(res.data(), res.data(), b.data(), N);
 #elif defined(USE_AVX512)
     static_assert(N >= 16 && (N & (N - 1)) == 0);
     double *rre = res.data(), *rim = res.data() + N / 2;
@@ -271,13 +301,8 @@ template <uint32_t N>
 inline void MulInFD(std::array<double, N> &res, const std::array<double, N> &a,
                     const std::array<double, N> &b)
 {
-#ifdef USE_INTERLEAVED_FORMAT
-    for (int i = 0; i < N / 2; i++) {
-        const std::complex tmp = std::complex(a[2 * i], a[2 * i + 1]) *
-                                 std::complex(b[2 * i], b[2 * i + 1]);
-        res[2 * i] = tmp.real();
-        res[2 * i + 1] = tmp.imag();
-    }
+#if defined(USE_INTERLEAVED_FORMAT) && defined(__AVX2__)
+    cmul_intl_avx2(res.data(), a.data(), b.data(), N);
 #elif defined(USE_AVX512)
     static_assert(N >= 16 && (N & (N - 1)) == 0);
     const double *are = a.data(), *aim = a.data() + N / 2;
@@ -329,13 +354,8 @@ template <uint32_t N>
 inline void FMAInFD(std::array<double, N> &res, const std::array<double, N> &a,
                     const std::array<double, N> &b)
 {
-#ifdef USE_INTERLEAVED_FORMAT
-    for (int i = 0; i < N / 2; i++) {
-        std::complex tmp = std::complex(a[2 * i], a[2 * i + 1]) *
-                           std::complex(b[2 * i], b[2 * i + 1]);
-        res[2 * i] += tmp.real();
-        res[2 * i + 1] += tmp.imag();
-    }
+#if defined(USE_INTERLEAVED_FORMAT) && defined(__AVX2__)
+    cmul_acc_intl_avx2(res.data(), a.data(), b.data(), N);
 #elif defined(USE_AVX512)
     static_assert(N >= 16 && (N & (N - 1)) == 0);
     const double *are = a.data(), *aim = a.data() + N / 2;
@@ -394,7 +414,24 @@ template <uint32_t N, int M, class ResArr, class BArr>
 inline void FMAInFD_Multi(ResArr &res, const std::array<double, N> &a,
                           const BArr &b_row)
 {
-#if defined(__AVX2__) && !defined(__AVX512F__) && !defined(USE_INTERLEAVED_FORMAT)
+#if defined(__AVX2__) && defined(USE_INTERLEAVED_FORMAT)
+    // Interleaved: load a once per 4-double block, fmaddsub for each m
+    for (uint32_t i = 0; i < N; i += 4) {
+        __m256d va = _mm256_load_pd(a.data() + i);
+        __m256d va_swap = _mm256_permute_pd(va, 0b0101);
+        __m256d va_re = _mm256_unpacklo_pd(va, va);
+        __m256d va_im = _mm256_unpackhi_pd(va, va);
+        for (int m = 0; m < M; m++) {
+            __m256d vb = _mm256_load_pd(b_row[m].data() + i);
+            __m256d vb_swap = _mm256_permute_pd(vb, 0b0101);
+            __m256d tmp = _mm256_mul_pd(va_im, vb_swap);
+            __m256d prod = _mm256_fmaddsub_pd(va_re, vb, tmp);
+            __m256d prev = _mm256_load_pd(res[m].data() + i);
+            _mm256_store_pd(res[m].data() + i, _mm256_add_pd(prev, prod));
+        }
+    }
+#elif defined(__AVX2__) && !defined(__AVX512F__)
+    // Split format
     const double *are = a.data(), *aim = a.data() + N / 2;
     for (uint32_t i = 0; i < N / 2; i += 4) {
         __m256d va_re = _mm256_load_pd(are + i);
@@ -424,7 +461,20 @@ template <uint32_t N, int M, class ResArr, class BArr>
 inline void MulInFD_Multi(ResArr &res, const std::array<double, N> &a,
                           const BArr &b_row)
 {
-#if defined(__AVX2__) && !defined(__AVX512F__) && !defined(USE_INTERLEAVED_FORMAT)
+#if defined(__AVX2__) && defined(USE_INTERLEAVED_FORMAT)
+    for (uint32_t i = 0; i < N; i += 4) {
+        __m256d va = _mm256_load_pd(a.data() + i);
+        __m256d va_re = _mm256_unpacklo_pd(va, va);
+        __m256d va_im = _mm256_unpackhi_pd(va, va);
+        for (int m = 0; m < M; m++) {
+            __m256d vb = _mm256_load_pd(b_row[m].data() + i);
+            __m256d vb_swap = _mm256_permute_pd(vb, 0b0101);
+            __m256d tmp = _mm256_mul_pd(va_im, vb_swap);
+            __m256d prod = _mm256_fmaddsub_pd(va_re, vb, tmp);
+            _mm256_store_pd(res[m].data() + i, prod);
+        }
+    }
+#elif defined(__AVX2__) && !defined(__AVX512F__)
     const double *are = a.data(), *aim = a.data() + N / 2;
     for (uint32_t i = 0; i < N / 2; i += 4) {
         __m256d va_re = _mm256_load_pd(are + i);
