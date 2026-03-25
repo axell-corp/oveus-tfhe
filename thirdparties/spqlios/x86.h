@@ -137,6 +137,32 @@ __m256i pack64to32(__m256i a, __m256i b)
 }
 
 
+// Fast f64→i64 via magic number trick: add 2^52+2^51, reinterpret bits as i64, subtract bias.
+// Correct for |value| < 2^52. For torus32, FFT output fits well within this range.
+inline __m256i magic_f64_to_i64(__m256d x) {
+    const __m256d magic_d = _mm256_set1_pd(6755399441055744.0);  // 2^52 + 2^51
+    const __m256i magic_i = _mm256_set1_epi64x(0x4338000000000000LL);
+    return _mm256_sub_epi64(_mm256_castpd_si256(_mm256_add_pd(x, magic_d)), magic_i);
+}
+
+// Convert f64→u32: magic trick i64 + pack. ~5 instructions per 8 values.
+inline void convert_f64_to_u32(uint32_t* const res, const double* const src, const int32_t N) {
+#ifdef USE_AVX512
+    for (int32_t i = 0; i < N; i += 8) {
+        const __m512d vals = _mm512_loadu_pd(&src[i]);
+        const __m512i i64 = _mm512_cvtpd_epi64(vals);
+        const __m256i i32 = _mm512_cvtepi64_epi32(i64);
+        _mm256_storeu_si256((__m256i*)&res[i], i32);
+    }
+#else
+    for (int32_t i = 0; i < N; i += 8) {
+        __m256i v1 = magic_f64_to_i64(_mm256_loadu_pd(&src[i]));
+        __m256i v2 = magic_f64_to_i64(_mm256_loadu_pd(&src[i + 4]));
+        _mm256_storeu_si256((__m256i*)&res[i], pack64to32(v1, v2));
+    }
+#endif
+}
+
 // Convert f64→u32 and ADD to existing u32 values (for TwistFFTAdd)
 inline void convert_f64_add_u32(uint32_t* const res, const double* const src, const int32_t N) {
 #ifdef USE_AVX512
@@ -149,37 +175,11 @@ inline void convert_f64_add_u32(uint32_t* const res, const double* const src, co
     }
 #else
     for (int32_t i = 0; i < N; i += 8) {
-        const __m256i int64_vals1 = mm256_cvtpd_epi64(_mm256_loadu_pd(&src[i]));
-        const __m256i int64_vals2 = mm256_cvtpd_epi64(_mm256_loadu_pd(&src[i + 4]));
-        const __m256i packed32 = pack64to32(int64_vals1, int64_vals2);
-        const __m256i prev = _mm256_loadu_si256((const __m256i*)&res[i]);
-        _mm256_storeu_si256((__m256i*)&res[i], _mm256_add_epi32(prev, packed32));
-    }
-#endif
-}
-
-inline void convert_f64_to_u32(uint32_t* const res, const double* const real_inout_direct, const int32_t N) {
-#ifdef USE_AVX512
-    for (int32_t i = 0; i < N; i += 8) {
-        const __m512d vals = _mm512_loadu_pd(&real_inout_direct[i]);
-        const __m512i i64 = _mm512_cvtpd_epi64(vals);
-        const __m256i i32 = _mm512_cvtepi64_epi32(i64);
-        _mm256_storeu_si256((__m256i*)&res[i], i32);
-    }
-#else
-    for (int32_t i = 0; i < N; i += 8) {
-        // Load 4 double values
-        const __m256d real_vals1 = _mm256_loadu_pd(&real_inout_direct[i]);
-        const __m256d real_vals2 = _mm256_loadu_pd(&real_inout_direct[i + 4]);
-
-        // Convert double to int64
-        const __m256i int64_vals1 = mm256_cvtpd_epi64(real_vals1);
-        const __m256i int64_vals2 = mm256_cvtpd_epi64(real_vals2);
-
-        const __m256i packed32 = pack64to32(int64_vals1,int64_vals2);
-
-        // Store the result
-        _mm256_storeu_si256((__m256i*)&res[i], packed32);
+        __m256i v1 = magic_f64_to_i64(_mm256_loadu_pd(&src[i]));
+        __m256i v2 = magic_f64_to_i64(_mm256_loadu_pd(&src[i + 4]));
+        __m256i packed = pack64to32(v1, v2);
+        __m256i prev = _mm256_loadu_si256((const __m256i*)&res[i]);
+        _mm256_storeu_si256((__m256i*)&res[i], _mm256_add_epi32(prev, packed));
     }
 #endif
 }
