@@ -8,8 +8,44 @@
 #include "x86.h"
 #include "fft_processor_spqlios.h"
 
+#ifdef USE_STOCKHAM_FFT
 // Constructor, destructor, thread_local instances, and C interface (fft/ifft/new_*_table)
 // are in stockham_fft_avx2.cpp. This file contains only the execute_* methods.
+#else
+// Assembly FFT backend: constructor, destructor, thread_locals defined here.
+int32_t rev(int32_t x, int32_t M) {
+    int32_t reps = 0;
+    for (int32_t j = M; j > 1; j /= 2) { reps = 2*reps+(x%2); x /= 2; }
+    return reps;
+}
+
+FFT_Processor_Spqlios::FFT_Processor_Spqlios(const int32_t N) : _2N(2*N), N(N), Ns2(N/2) {
+    tables_direct = new_fft_table(N);
+    tables_reverse = new_ifft_table(N);
+    real_inout_direct = fft_table_get_buffer(tables_direct);
+    imag_inout_direct = real_inout_direct + Ns2;
+    reva = new int32_t[Ns2];
+    cosomegaxminus1 = new double[2*_2N];
+    sinomegaxminus1 = cosomegaxminus1 + _2N;
+    int32_t r1 = rev(1, _2N), r3 = rev(3, _2N);
+    for (int32_t ri = r1; ri < r3; ri++) reva[ri-r1] = rev(ri, _2N);
+    for (int32_t j = 0; j < _2N; j++) {
+        cosomegaxminus1[j] = cos(2*M_PI*j/_2N) - 1.;
+        sinomegaxminus1[j] = sin(2*M_PI*j/_2N);
+    }
+}
+
+FFT_Processor_Spqlios::~FFT_Processor_Spqlios() {
+    delete (tables_direct);
+    delete (tables_reverse);
+    delete[] cosomegaxminus1;
+    delete[] reva;
+}
+
+thread_local FFT_Processor_Spqlios fftplvl1(TFHEpp::lvl1param::n);
+thread_local FFT_Processor_Spqlios fftplvl2(TFHEpp::lvl2param::n);
+thread_local FFT_Processor_Spqlios fftplvl3(TFHEpp::lvl3param::n);
+#endif
 
 using namespace std;
 
@@ -91,12 +127,19 @@ void FFT_Processor_Spqlios::execute_reverse_int(double *res, const int32_t *a) {
     ifft(tables_reverse, res);
 }
 
+#ifdef USE_STOCKHAM_FFT
 extern "C" void ifft_from_i32(const void *tables, double *out, const int32_t *in_re, const int32_t *in_im);
+#endif
 
 void FFT_Processor_Spqlios::execute_reverse_torus32(double *res, const uint32_t *a) {
+#ifdef USE_STOCKHAM_FFT
     // Fused: convert int32→double + inverse twist + IFFT in one pipeline
     const int32_t *aa = (const int32_t *)a;
     ifft_from_i32(tables_reverse, res, aa, aa + Ns2);
+#else
+    int32_t *aa = (int32_t *)a;
+    execute_reverse_int(res, aa);
+#endif
 }
 
 void FFT_Processor_Spqlios::execute_reverse_torus64(double* res, const uint64_t* a) {
@@ -117,34 +160,60 @@ void FFT_Processor_Spqlios::execute_reverse_torus64_uint(
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus32(uint32_t *res, const double *a) {
-    // 2/N scaling is baked into the Stockham forward twist twiddles.
     double *ap = const_cast<double *>(a);
+#ifndef USE_STOCKHAM_FFT
+    // Assembly FFT needs explicit 2/N scaling
+    static const double _2sN = double(2) / double(N);
+    const __m256d vscale = _mm256_set1_pd(_2sN);
+    for (int i = 0; i < N; i += 4)
+        _mm256_store_pd(ap + i, _mm256_mul_pd(_mm256_load_pd(ap + i), vscale));
+#endif
     fft(tables_direct, ap);
     SPQLIOS::convert_f64_to_u32(res, ap, N);
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus32_add(uint32_t *res, const double *a) {
-    // 2/N scaling is baked into the Stockham forward twist twiddles.
     double *ap = const_cast<double *>(a);
+#ifndef USE_STOCKHAM_FFT
+    static const double _2sN = double(2) / double(N);
+    const __m256d vscale = _mm256_set1_pd(_2sN);
+    for (int i = 0; i < N; i += 4)
+        _mm256_store_pd(ap + i, _mm256_mul_pd(_mm256_load_pd(ap + i), vscale));
+#endif
     fft(tables_direct, ap);
     SPQLIOS::convert_f64_add_u32(res, ap, N);
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus32_q(uint32_t *res, const double *a, const uint32_t q) {
+#ifdef USE_STOCKHAM_FFT
     memcpy(real_inout_direct, a, N * sizeof(double));
+#else
+    static const double _2sN = double(2) / double(N);
+    for (int32_t i = 0; i < N; i++) real_inout_direct[i] = a[i] * _2sN;
+#endif
     fft(tables_direct, real_inout_direct);
     for (int32_t i = 0; i < N; i++) res[i] = uint32_t((int64_t(real_inout_direct[i])%q+q)%q);
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus32_rescale(uint32_t *res, const double *a, const double D) {
+#ifdef USE_STOCKHAM_FFT
     memcpy(real_inout_direct, a, N * sizeof(double));
+#else
+    static const double _2sN = double(2) / double(N);
+    for (int32_t i = 0; i < N; i++) real_inout_direct[i] = a[i] * _2sN;
+#endif
     fft(tables_direct, real_inout_direct);
     for (int32_t i = 0; i < N; i++) res[i] = static_cast<uint32_t>(int64_t(real_inout_direct[i]/D));
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus32_rescale_clpx(
     uint32_t *res, const double *a, const double q, const uint32_t plain_modulus) {
+#ifdef USE_STOCKHAM_FFT
     memcpy(real_inout_direct, a, N * sizeof(double));
+#else
+    static const double _2sN = double(2) / double(N);
+    for (int32_t i = 0; i < N; i++) real_inout_direct[i] = a[i] * _2sN;
+#endif
     fft(tables_direct, real_inout_direct);
     for (int32_t i = 0; i < N; i++) {
         if (i == 0)
@@ -203,28 +272,46 @@ static inline void f64_to_i64_add_avx2(uint64_t* res, const double* a, int N) {
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus64(uint64_t* res, double* a) {
-    // 2/N scaling baked into Stockham forward twist twiddles.
+#ifndef USE_STOCKHAM_FFT
+    static const double _2sN = double(2)/double(N);
+    const __m256d vscale = _mm256_set1_pd(_2sN);
+    for (int i = 0; i < N; i += 4)
+        _mm256_storeu_pd(a + i, _mm256_mul_pd(_mm256_loadu_pd(a + i), vscale));
+#endif
     fft(tables_direct, a);
     f64_to_i64_avx2(res, a, N);
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus64_add(uint64_t* res, double* a) {
-    // 2/N scaling baked into Stockham forward twist twiddles.
+#ifndef USE_STOCKHAM_FFT
+    static const double _2sN = double(2)/double(N);
+    const __m256d vscale = _mm256_set1_pd(_2sN);
+    for (int i = 0; i < N; i += 4)
+        _mm256_storeu_pd(a + i, _mm256_mul_pd(_mm256_loadu_pd(a + i), vscale));
+#endif
     fft(tables_direct, a);
     f64_to_i64_add_avx2(res, a, N);
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus64_rescale(uint64_t* res, const double* a, const double D) {
+#ifdef USE_STOCKHAM_FFT
     memcpy(real_inout_direct, a, N * sizeof(double));
+#else
+    static const double _2sN = double(2)/double(N);
+    for (int i = 0; i < N; i++) real_inout_direct[i] = a[i] * _2sN;
+#endif
     fft(tables_direct, real_inout_direct);
     for (int i=0; i<N; i++) res[i] = uint64_t(std::round(real_inout_direct[i]/D));
 }
 
 void FFT_Processor_Spqlios::execute_direct_torus64_rescale_clpx(
     uint64_t *res, const double *a, const uint32_t plain_modulus) {
+#ifdef USE_STOCKHAM_FFT
     memcpy(real_inout_direct, a, N * sizeof(double));
+#else
+    static const double _2sN = double(2)/double(N);
+    for (int i = 0; i < N; i++) real_inout_direct[i] = a[i] * _2sN;
+#endif
     fft(tables_direct, real_inout_direct);
     f64_to_i64_avx2(res, real_inout_direct, N);
 }
-
-// Destructor and thread_local instances are in stockham_fft_avx2.cpp
