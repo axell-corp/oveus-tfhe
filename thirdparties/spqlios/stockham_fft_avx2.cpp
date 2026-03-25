@@ -206,73 +206,93 @@ static void stockham_r4_fwd_pass(
         _mm256_storeu_pd(dst_im + 3*q + p, _mm256_add_pd(amc_im, bmd_re));
     }
 
-    // j=1..s-1: with twiddle multiply
+    // j=1..s-1: with twiddle multiply.
+    // Hand-written inline asm for zero YMM spills. Key trick: compute out0 and out2
+    // first (uses apc,bpd), freeing 4 regs before computing out1 and out3 (uses amc,jbmd).
+    // ymm0=w1_re, ymm1=w1_im, ymm2=w2_re, ymm3=w2_im, ymm4=w3_re, ymm5=w3_im, ymm6=neg
     for (int32_t j = 1; j < s; j++) {
         const double *twj = tw + j * 6;
-        // Broadcast twiddles — 2 registers per twiddle, 6 total
-        __m256d w1_re = _mm256_broadcast_sd(twj);
-        __m256d w1_im = _mm256_broadcast_sd(twj + 1);
-        __m256d w2_re = _mm256_broadcast_sd(twj + 2);
-        __m256d w2_im = _mm256_broadcast_sd(twj + 3);
-        __m256d w3_re = _mm256_broadcast_sd(twj + 4);
-        __m256d w3_im = _mm256_broadcast_sd(twj + 5);
-        const int32_t out_off = q * 4 * j;
+        const int64_t stride_bytes = (int64_t)stride * 8;
+        const int64_t q_bytes = (int64_t)q * 8;
+        const int64_t out_off_bytes = (int64_t)(q * 4 * j) * 8;
+
+        __asm__ __volatile__ (
+            "vbroadcastsd   (%[tw]),    %%ymm0\n\t"
+            "vbroadcastsd  8(%[tw]),    %%ymm1\n\t"
+            "vbroadcastsd 16(%[tw]),    %%ymm2\n\t"
+            "vbroadcastsd 24(%[tw]),    %%ymm3\n\t"
+            "vbroadcastsd 32(%[tw]),    %%ymm4\n\t"
+            "vbroadcastsd 40(%[tw]),    %%ymm5\n\t"
+            : : [tw] "r"(twj)
+            : "ymm0","ymm1","ymm2","ymm3","ymm4","ymm5"
+        );
 
         for (int32_t p = 0; p < q; p += 4) {
-            const int32_t idx = j + s * p;
-            __m256d a_re = _mm256_loadu_pd(src_re + idx);
-            __m256d a_im = _mm256_loadu_pd(src_im + idx);
-            __m256d c_re = _mm256_loadu_pd(src_re + idx + 2*stride);
-            __m256d c_im = _mm256_loadu_pd(src_im + idx + 2*stride);
-            __m256d apc_re = _mm256_add_pd(a_re, c_re);
-            __m256d apc_im = _mm256_add_pd(a_im, c_im);
-            __m256d amc_re = _mm256_sub_pd(a_re, c_re);
-            __m256d amc_im = _mm256_sub_pd(a_im, c_im);
-
-            __m256d b_re = _mm256_loadu_pd(src_re + idx + stride);
-            __m256d b_im = _mm256_loadu_pd(src_im + idx + stride);
-            __m256d d_re = _mm256_loadu_pd(src_re + idx + 3*stride);
-            __m256d d_im = _mm256_loadu_pd(src_im + idx + 3*stride);
-            __m256d bpd_re = _mm256_add_pd(b_re, d_re);
-            __m256d bpd_im = _mm256_add_pd(b_im, d_im);
-            __m256d bmd_re = _mm256_sub_pd(b_re, d_re);
-            __m256d bmd_im = _mm256_sub_pd(b_im, d_im);
-            __m256d jbmd_re = _mm256_xor_pd(bmd_im, neg);
-            // jbmd_im = bmd_re (reuse)
-
-            // out0 = apc + bpd (no twiddle)
-            _mm256_storeu_pd(dst_re + out_off + p, _mm256_add_pd(apc_re, bpd_re));
-            _mm256_storeu_pd(dst_im + out_off + p, _mm256_add_pd(apc_im, bpd_im));
-
-            // out1 = (amc - jbmd) * w1 — compute, multiply, store immediately
-            __m256d t_re = _mm256_sub_pd(amc_re, jbmd_re);
-            __m256d t_im = _mm256_sub_pd(amc_im, bmd_re);
-            __m256d r_re = _mm256_mul_pd(t_re, w1_re);
-            r_re = _mm256_fnmadd_pd(t_im, w1_im, r_re);
-            __m256d r_im = _mm256_mul_pd(t_im, w1_re);
-            r_im = _mm256_fmadd_pd(t_re, w1_im, r_im);
-            _mm256_storeu_pd(dst_re + out_off + q + p, r_re);
-            _mm256_storeu_pd(dst_im + out_off + q + p, r_im);
-
-            // out2 = (apc - bpd) * w2
-            t_re = _mm256_sub_pd(apc_re, bpd_re);
-            t_im = _mm256_sub_pd(apc_im, bpd_im);
-            r_re = _mm256_mul_pd(t_re, w2_re);
-            r_re = _mm256_fnmadd_pd(t_im, w2_im, r_re);
-            r_im = _mm256_mul_pd(t_im, w2_re);
-            r_im = _mm256_fmadd_pd(t_re, w2_im, r_im);
-            _mm256_storeu_pd(dst_re + out_off + 2*q + p, r_re);
-            _mm256_storeu_pd(dst_im + out_off + 2*q + p, r_im);
-
-            // out3 = (amc + jbmd) * w3
-            t_re = _mm256_add_pd(amc_re, jbmd_re);
-            t_im = _mm256_add_pd(amc_im, bmd_re);
-            r_re = _mm256_mul_pd(t_re, w3_re);
-            r_re = _mm256_fnmadd_pd(t_im, w3_im, r_re);
-            r_im = _mm256_mul_pd(t_im, w3_re);
-            r_im = _mm256_fmadd_pd(t_re, w3_im, r_im);
-            _mm256_storeu_pd(dst_re + out_off + 3*q + p, r_re);
-            _mm256_storeu_pd(dst_im + out_off + 3*q + p, r_im);
+            // Compute pointers for this iteration
+            const double *sre = src_re + j + (int64_t)s * p;
+            const double *sim = src_im + j + (int64_t)s * p;
+            double *dre = dst_re + q * 4 * j + p;
+            double *dim = dst_im + q * 4 * j + p;
+            // All destination offsets relative to dre/dim in bytes
+            __asm__ __volatile__ (
+                // --- Load a,c → apc, amc ---
+                "vmovupd    (%[sre]),         %%ymm15\n\t"
+                "vmovupd    (%[sre],%[st2]),  %%ymm7\n\t"
+                "vaddpd     %%ymm7,  %%ymm15, %%ymm8\n\t"
+                "vsubpd     %%ymm7,  %%ymm15, %%ymm9\n\t"
+                "vmovupd    (%[sim]),         %%ymm15\n\t"
+                "vmovupd    (%[sim],%[st2]),  %%ymm7\n\t"
+                "vaddpd     %%ymm7,  %%ymm15, %%ymm10\n\t"
+                "vsubpd     %%ymm7,  %%ymm15, %%ymm14\n\t"
+                // --- Load b,d → bpd, bmd ---
+                "vmovupd    (%[sre],%[st1]),  %%ymm15\n\t"
+                "vmovupd    (%[sre],%[st3]),  %%ymm7\n\t"
+                "vaddpd     %%ymm7,  %%ymm15, %%ymm11\n\t"
+                "vsubpd     %%ymm7,  %%ymm15, %%ymm13\n\t"
+                "vmovupd    (%[sim],%[st1]),  %%ymm15\n\t"
+                "vmovupd    (%[sim],%[st3]),  %%ymm7\n\t"
+                "vaddpd     %%ymm7,  %%ymm15, %%ymm12\n\t"
+                "vsubpd     %%ymm7,  %%ymm15, %%ymm7\n\t"
+                // --- out0 = apc + bpd ---
+                "vaddpd     %%ymm11, %%ymm8,  %%ymm15\n\t"
+                "vmovupd    %%ymm15, (%[dre])\n\t"
+                "vaddpd     %%ymm12, %%ymm10, %%ymm15\n\t"
+                "vmovupd    %%ymm15, (%[dim])\n\t"
+                // --- out2 = (apc - bpd) * w2 ---
+                "vsubpd     %%ymm11, %%ymm8,  %%ymm8\n\t"
+                "vsubpd     %%ymm12, %%ymm10, %%ymm10\n\t"
+                "vmulpd     %%ymm2,  %%ymm8,  %%ymm11\n\t"
+                "vfnmadd231pd %%ymm3,%%ymm10, %%ymm11\n\t"
+                "vmovupd    %%ymm11, (%[dre],%[q2])\n\t"
+                "vmulpd     %%ymm2,  %%ymm10, %%ymm12\n\t"
+                "vfmadd231pd %%ymm3, %%ymm8,  %%ymm12\n\t"
+                "vmovupd    %%ymm12, (%[dim],%[q2])\n\t"
+                // --- jbmd ---
+                "vxorpd     %%ymm6,  %%ymm7,  %%ymm8\n\t"
+                // --- out1 = (amc - jbmd) * w1 ---
+                "vsubpd     %%ymm8,  %%ymm9,  %%ymm10\n\t"
+                "vsubpd     %%ymm13, %%ymm14, %%ymm11\n\t"
+                "vmulpd     %%ymm0,  %%ymm10, %%ymm12\n\t"
+                "vfnmadd231pd %%ymm1,%%ymm11, %%ymm12\n\t"
+                "vmovupd    %%ymm12, (%[dre],%[q1])\n\t"
+                "vmulpd     %%ymm0,  %%ymm11, %%ymm15\n\t"
+                "vfmadd231pd %%ymm1, %%ymm10, %%ymm15\n\t"
+                "vmovupd    %%ymm15, (%[dim],%[q1])\n\t"
+                // --- out3 = (amc + jbmd) * w3 ---
+                "vaddpd     %%ymm8,  %%ymm9,  %%ymm10\n\t"
+                "vaddpd     %%ymm13, %%ymm14, %%ymm11\n\t"
+                "vmulpd     %%ymm4,  %%ymm10, %%ymm12\n\t"
+                "vfnmadd231pd %%ymm5,%%ymm11, %%ymm12\n\t"
+                "vmovupd    %%ymm12, (%[dre],%[q3])\n\t"
+                "vmulpd     %%ymm4,  %%ymm11, %%ymm15\n\t"
+                "vfmadd231pd %%ymm5, %%ymm10, %%ymm15\n\t"
+                "vmovupd    %%ymm15, (%[dim],%[q3])\n\t"
+                : : [sre] "r"(sre), [sim] "r"(sim),
+                    [st1] "r"(stride_bytes), [st2] "r"(stride_bytes*2), [st3] "r"(stride_bytes*3),
+                    [dre] "r"(dre), [dim] "r"(dim),
+                    [q1] "r"(q_bytes), [q2] "r"(2*q_bytes), [q3] "r"(3*q_bytes)
+                : "ymm7","ymm8","ymm9","ymm10","ymm11","ymm12","ymm13","ymm14","ymm15","memory"
+            );
         }
     }
 }
