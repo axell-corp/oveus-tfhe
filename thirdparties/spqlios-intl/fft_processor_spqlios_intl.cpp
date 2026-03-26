@@ -856,9 +856,13 @@ static void build_tables(int32_t nn, INTL_FFT_PRECOMP *reps) {
             fwd += 4;
         }
     }
-    for (int32_t k = 0; k < ns2; k++) {
-        *fwd++ = accurate_cos(-k, n);
-        *fwd++ = accurate_sin(-k, n);
+    // Forward twist: bake in scale factor 2/N so execute_direct can skip scaling
+    {
+        const double scale = 2.0 / nn;
+        for (int32_t k = 0; k < ns2; k++) {
+            *fwd++ = scale * accurate_cos(-k, n);
+            *fwd++ = scale * accurate_sin(-k, n);
+        }
     }
 
     double *inv = reps->trig_inv;
@@ -1054,11 +1058,7 @@ void FFT_Processor_Spqlios_Intl::execute_direct_torus32(uint32_t *res, const dou
         for (int32_t i = 0; i < Ns2; i += 4) {
             __m256d v0 = _mm256_loadu_pd(real_inout_direct + 2*i);       // [re0,im0,re1,im1]
             __m256d v1 = _mm256_loadu_pd(real_inout_direct + 2*i + 4);   // [re2,im2,re3,im3]
-            // De-interleave: extract re and im
-            __m256d re = _mm256_permute2f128_pd(
-                _mm256_unpacklo_pd(v0, v1),   // [re0,re2,re1,re3]
-                _mm256_unpacklo_pd(v0, v1), 0x20);
-            // Actually simpler: use shuffle_pd for within-lane, permute2f128 for cross-lane
+            // De-interleave: use shuffle_pd for within-lane, permute4x64 for cross-lane
             __m256d re_raw = _mm256_shuffle_pd(v0, v1, 0b0000); // [re0,re2,re1,re3]
             __m256d im_raw = _mm256_shuffle_pd(v0, v1, 0b1111); // [im0,im2,im1,im3]
             re_raw = _mm256_permute4x64_pd(re_raw, 0b11011000);  // [re0,re1,re2,re3]
