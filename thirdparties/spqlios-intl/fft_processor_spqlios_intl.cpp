@@ -981,8 +981,8 @@ void FFT_Processor_Spqlios_Intl::execute_reverse_int(double *res, const int32_t 
         __m256d im = _mm256_cvtepi32_pd(im_i32);
         __m256d lo = _mm256_unpacklo_pd(re, im);
         __m256d hi = _mm256_unpackhi_pd(re, im);
-        _mm256_storeu_pd(res + 4*i,     _mm256_permute2f128_pd(lo, hi, 0x20));
-        _mm256_storeu_pd(res + 4*i + 4, _mm256_permute2f128_pd(lo, hi, 0x31));
+        _mm256_storeu_pd(res + 2*i,     _mm256_permute2f128_pd(lo, hi, 0x20));
+        _mm256_storeu_pd(res + 2*i + 4, _mm256_permute2f128_pd(lo, hi, 0x31));
     }
 #endif
     intl_ifft((const INTL_FFT_PRECOMP*)tables_reverse, res);
@@ -1006,8 +1006,8 @@ void FFT_Processor_Spqlios_Intl::execute_reverse_uint(double *res, const uint32_
         __m256d im = _mm256_cvtepi32_pd(im_i32);
         __m256d lo = _mm256_unpacklo_pd(re, im);
         __m256d hi = _mm256_unpackhi_pd(re, im);
-        _mm256_storeu_pd(res + 4*i,     _mm256_permute2f128_pd(lo, hi, 0x20));
-        _mm256_storeu_pd(res + 4*i + 4, _mm256_permute2f128_pd(lo, hi, 0x31));
+        _mm256_storeu_pd(res + 2*i,     _mm256_permute2f128_pd(lo, hi, 0x20));
+        _mm256_storeu_pd(res + 2*i + 4, _mm256_permute2f128_pd(lo, hi, 0x31));
     }
 #endif
     intl_ifft((const INTL_FFT_PRECOMP*)tables_reverse, res);
@@ -1100,8 +1100,8 @@ void FFT_Processor_Spqlios_Intl::execute_direct_torus32_add(uint32_t *res, const
         const __m256d magic_d = _mm256_set1_pd(6755399441055744.0);
         const __m256i magic_i = _mm256_set1_epi64x(0x4338000000000000LL);
         for (int32_t i = 0; i < Ns2; i += 4) {
-            __m256d v0 = _mm256_loadu_pd(real_inout_direct + 4*i);
-            __m256d v1 = _mm256_loadu_pd(real_inout_direct + 4*i + 4);
+            __m256d v0 = _mm256_loadu_pd(real_inout_direct + 2*i);
+            __m256d v1 = _mm256_loadu_pd(real_inout_direct + 2*i + 4);
             __m256d re_raw = _mm256_permute4x64_pd(_mm256_shuffle_pd(v0, v1, 0b0000), 0b11011000);
             __m256d im_raw = _mm256_permute4x64_pd(_mm256_shuffle_pd(v0, v1, 0b1111), 0b11011000);
             __m256i re_i64 = _mm256_sub_epi64(_mm256_castpd_si256(_mm256_add_pd(re_raw, magic_d)), magic_i);
