@@ -557,24 +557,15 @@ static void stockham_r4_avx2(int32_t ns2, const double *bf_twiddles,
 
 // ── Forward/Inverse FFT wrappers ────────────────────────────────────────────
 
-// Forward FFT: scale(2/N) → Stockham → twist.
-// Scale is applied to input BEFORE FFT to keep intermediates small (critical
-// for 64-bit torus where FD product values can reach ~2^83).
+// Forward FFT: Stockham + twist.  Reads from src_in (may be != c).
+// Scale factor (2/N) is pre-baked into the forward twist twiddles.
 static void intl_fft_from(const INTL_FFT_PRECOMP *tables, const double *src_in,
                           double *c) {
     const int32_t ns2 = tables->ns2;
-    const int32_t nn = ns2 * 2;
     const double *trig = tables->trig_fwd;
 
 #ifdef USE_AVX512
-    {
-        const __m512d vscale = _mm512_set1_pd(2.0 / nn);
-        for (int32_t j = 0; j < ns2; j += 4) {
-            __m512d v = _mm512_loadu_pd(src_in + j * 2);
-            _mm512_storeu_pd(c + j * 2, _mm512_mul_pd(v, vscale));
-        }
-    }
-    stockham_r4_from<true>(ns2, trig, c, c, tables->scratch);
+    stockham_r4_from<true>(ns2, trig, src_in, c, tables->scratch);
 
     const double *tw_twist = trig;
     for (int32_t s = 4; 4*s < ns2; s *= 4)
@@ -587,14 +578,8 @@ static void intl_fft_from(const INTL_FFT_PRECOMP *tables, const double *src_in,
         _mm512_store_pd(p, cmul512(a, w));
     }
 #else
-    // AVX2: scale(2/N) + copy input, run Stockham, then twist
-    {
-        const __m256d vscale = _mm256_set1_pd(2.0 / nn);
-        for (int32_t j = 0; j < ns2; j += 2) {
-            __m256d v = _mm256_loadu_pd(src_in + j * 2);
-            _mm256_storeu_pd(c + j * 2, _mm256_mul_pd(v, vscale));
-        }
-    }
+    // AVX2: copy input, run Stockham, then twist
+    if (src_in != c) memcpy(c, src_in, ns2 * 2 * sizeof(double));
     stockham_r4_avx2<true>(ns2, trig, c, tables->scratch);
 
     // Advance past butterfly twiddles to reach the twist table
@@ -723,11 +708,12 @@ static void build_tables(int32_t nn, INTL_FFT_PRECOMP *reps) {
             fwd += 8;
         }
     }
-    // Forward twist: NO scale (2/N applied in intl_fft_from before FFT)
+    // Forward twist with 2/N scale baked in
     {
+        const double scale = 2.0 / nn;
         for (int32_t k = 0; k < ns2; k++) {
-            *fwd++ = accurate_cos(-k, n);
-            *fwd++ = accurate_sin(-k, n);
+            *fwd++ = scale * accurate_cos(-k, n);
+            *fwd++ = scale * accurate_sin(-k, n);
         }
     }
 
@@ -791,11 +777,12 @@ static void build_tables(int32_t nn, INTL_FFT_PRECOMP *reps) {
             ss *= 4; qq /= 4;
         }
     }
-    // Forward twist: NO scale (2/N applied in intl_fft_from before FFT)
+    // Forward twist with 2/N scale baked in
     {
+        const double scale = 2.0 / nn;
         for (int32_t k = 0; k < ns2; k++) {
-            *fwd++ = accurate_cos(-k, n);
-            *fwd++ = accurate_sin(-k, n);
+            *fwd++ = scale * accurate_cos(-k, n);
+            *fwd++ = scale * accurate_sin(-k, n);
         }
     }
 
@@ -942,8 +929,13 @@ void FFT_Processor_Spqlios_Intl::execute_reverse_uint(double *res, const uint32_
     for (int32_t i = 0; i < Ns2; i += 4) {
         __m128i re_i32 = _mm_loadu_si128((const __m128i*)(a + i));
         __m128i im_i32 = _mm_loadu_si128((const __m128i*)(a + i + Ns2));
-        __m256d re = _mm256_cvtepi32_pd(re_i32);  // unsigned but small values, cvt signed is fine
+        // AVX2 has no _mm256_cvtepu32_pd. Emulate: convert signed, then fix
+        // negative results by adding 2^32 (for values where bit 31 was set).
+        __m256d re = _mm256_cvtepi32_pd(re_i32);
         __m256d im = _mm256_cvtepi32_pd(im_i32);
+        const __m256d fix = _mm256_set1_pd(4294967296.0);  // 2^32
+        re = _mm256_add_pd(re, _mm256_and_pd(fix, _mm256_cmp_pd(re, _mm256_setzero_pd(), _CMP_LT_OQ)));
+        im = _mm256_add_pd(im, _mm256_and_pd(fix, _mm256_cmp_pd(im, _mm256_setzero_pd(), _CMP_LT_OQ)));
         __m256d lo = _mm256_unpacklo_pd(re, im);
         __m256d hi = _mm256_unpackhi_pd(re, im);
         _mm256_storeu_pd(res + 2*i,     _mm256_permute2f128_pd(lo, hi, 0x20));
@@ -1080,11 +1072,8 @@ static inline __m256i f64_to_i64(__m256d x) {
 
 void FFT_Processor_Spqlios_Intl::execute_direct_torus64(uint64_t *res, double *a) {
     auto *tables = (const INTL_FFT_PRECOMP*)tables_direct;
-    // Apply 2/N scale BEFORE FFT (matching non-interleaved SPQLIOS).
-    // This keeps FFT intermediates small, preserving precision for 64-bit torus.
-    // The 2/N in the twist twiddles is redundant here, but the twist table already
-    // includes it, so we must NOT scale the input (it would double-scale).
     intl_fft_from(tables, a, real_inout_direct);
+    // De-interleave + convert f64→u64 with full-range IEEE754 bit extraction.
     for (int32_t i = 0; i < Ns2; i += 4) {
         __m256d v0 = _mm256_loadu_pd(real_inout_direct + 2*i);
         __m256d v1 = _mm256_loadu_pd(real_inout_direct + 2*i + 4);
