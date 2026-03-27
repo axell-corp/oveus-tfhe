@@ -557,15 +557,24 @@ static void stockham_r4_avx2(int32_t ns2, const double *bf_twiddles,
 
 // ── Forward/Inverse FFT wrappers ────────────────────────────────────────────
 
-// Forward FFT: Stockham + twist.  Reads from src_in (may be != c).
-// Scale factor (2/N) is pre-baked into the forward twist twiddles.
+// Forward FFT: scale(2/N) → Stockham → twist.
+// Scale is applied to input BEFORE FFT to keep intermediates small (critical
+// for 64-bit torus where FD product values can reach ~2^83).
 static void intl_fft_from(const INTL_FFT_PRECOMP *tables, const double *src_in,
                           double *c) {
     const int32_t ns2 = tables->ns2;
+    const int32_t nn = ns2 * 2;
     const double *trig = tables->trig_fwd;
 
 #ifdef USE_AVX512
-    stockham_r4_from<true>(ns2, trig, src_in, c, tables->scratch);
+    {
+        const __m512d vscale = _mm512_set1_pd(2.0 / nn);
+        for (int32_t j = 0; j < ns2; j += 4) {
+            __m512d v = _mm512_loadu_pd(src_in + j * 2);
+            _mm512_storeu_pd(c + j * 2, _mm512_mul_pd(v, vscale));
+        }
+    }
+    stockham_r4_from<true>(ns2, trig, c, c, tables->scratch);
 
     const double *tw_twist = trig;
     for (int32_t s = 4; 4*s < ns2; s *= 4)
@@ -578,8 +587,14 @@ static void intl_fft_from(const INTL_FFT_PRECOMP *tables, const double *src_in,
         _mm512_store_pd(p, cmul512(a, w));
     }
 #else
-    // AVX2: copy input, run Stockham, then twist
-    if (src_in != c) memcpy(c, src_in, ns2 * 2 * sizeof(double));
+    // AVX2: scale(2/N) + copy input, run Stockham, then twist
+    {
+        const __m256d vscale = _mm256_set1_pd(2.0 / nn);
+        for (int32_t j = 0; j < ns2; j += 2) {
+            __m256d v = _mm256_loadu_pd(src_in + j * 2);
+            _mm256_storeu_pd(c + j * 2, _mm256_mul_pd(v, vscale));
+        }
+    }
     stockham_r4_avx2<true>(ns2, trig, c, tables->scratch);
 
     // Advance past butterfly twiddles to reach the twist table
@@ -708,12 +723,11 @@ static void build_tables(int32_t nn, INTL_FFT_PRECOMP *reps) {
             fwd += 8;
         }
     }
-    // Forward twist: bake in scale factor 2/N so execute_direct can skip scaling
+    // Forward twist: NO scale (2/N applied in intl_fft_from before FFT)
     {
-        const double scale = 2.0 / nn;
         for (int32_t k = 0; k < ns2; k++) {
-            *fwd++ = scale * accurate_cos(-k, n);
-            *fwd++ = scale * accurate_sin(-k, n);
+            *fwd++ = accurate_cos(-k, n);
+            *fwd++ = accurate_sin(-k, n);
         }
     }
 
@@ -777,12 +791,11 @@ static void build_tables(int32_t nn, INTL_FFT_PRECOMP *reps) {
             ss *= 4; qq /= 4;
         }
     }
-    // Forward twist: bake in scale factor 2/N so execute_direct can skip scaling
+    // Forward twist: NO scale (2/N applied in intl_fft_from before FFT)
     {
-        const double scale = 2.0 / nn;
         for (int32_t k = 0; k < ns2; k++) {
-            *fwd++ = scale * accurate_cos(-k, n);
-            *fwd++ = scale * accurate_sin(-k, n);
+            *fwd++ = accurate_cos(-k, n);
+            *fwd++ = accurate_sin(-k, n);
         }
     }
 
@@ -1043,27 +1056,63 @@ void FFT_Processor_Spqlios_Intl::execute_direct_torus32_add(uint32_t *res, const
 #endif
 }
 
+// Full-range f64→u64 via IEEE754 bit extraction (from non-interleaved SPQLIOS).
+// Uses offset 1075 (= bias + mantissa_bits) so that for values > 2^52, the left
+// shift naturally wraps modulo 2^64, matching torus arithmetic. This is critical
+// because polynomial multiplication results can exceed 2^63 before modular reduction.
+static inline __m256i f64_to_i64(__m256d x) {
+    const __m256i bits = _mm256_castpd_si256(x);
+    const __m256i mantissa = _mm256_or_si256(
+        _mm256_and_si256(bits, _mm256_set1_epi64x(0xFFFFFFFFFFFFF)),
+        _mm256_set1_epi64x(0x10000000000000));
+    const __m256i biased_exp = _mm256_and_si256(
+        _mm256_srli_epi64(bits, 52), _mm256_set1_epi64x(0x7FF));
+    const __m256i sign_mask = _mm256_sub_epi64(
+        _mm256_setzero_si256(), _mm256_srli_epi64(bits, 63));
+    const __m256i offset = _mm256_set1_epi64x(1075);
+    const __m256i shift = _mm256_sub_epi64(biased_exp, offset);
+    const __m256i neg_shift = _mm256_sub_epi64(offset, biased_exp);
+    const __m256i val = _mm256_or_si256(
+        _mm256_sllv_epi64(mantissa, shift),
+        _mm256_srlv_epi64(mantissa, neg_shift));
+    return _mm256_sub_epi64(_mm256_xor_si256(val, sign_mask), sign_mask);
+}
+
 void FFT_Processor_Spqlios_Intl::execute_direct_torus64(uint64_t *res, double *a) {
     auto *tables = (const INTL_FFT_PRECOMP*)tables_direct;
+    // Apply 2/N scale BEFORE FFT (matching non-interleaved SPQLIOS).
+    // This keeps FFT intermediates small, preserving precision for 64-bit torus.
+    // The 2/N in the twist twiddles is redundant here, but the twist table already
+    // includes it, so we must NOT scale the input (it would double-scale).
     intl_fft_from(tables, a, real_inout_direct);
-    const double magic = 6755399441055744.0;
-    const int64_t magic_i = 0x4338000000000000LL;
-    for (int32_t i = 0; i < Ns2; i++) {
-        union { double d; int64_t l; } u;
-        u.d = real_inout_direct[2*i] + magic; res[i] = (uint64_t)(u.l - magic_i);
-        u.d = real_inout_direct[2*i+1] + magic; res[i+Ns2] = (uint64_t)(u.l - magic_i);
+    for (int32_t i = 0; i < Ns2; i += 4) {
+        __m256d v0 = _mm256_loadu_pd(real_inout_direct + 2*i);
+        __m256d v1 = _mm256_loadu_pd(real_inout_direct + 2*i + 4);
+        __m256d re = _mm256_permute4x64_pd(
+            _mm256_shuffle_pd(v0, v1, 0b0000), 0b11011000);
+        __m256d im = _mm256_permute4x64_pd(
+            _mm256_shuffle_pd(v0, v1, 0b1111), 0b11011000);
+        _mm256_storeu_si256((__m256i*)(res + i), f64_to_i64(re));
+        _mm256_storeu_si256((__m256i*)(res + i + Ns2), f64_to_i64(im));
     }
 }
 
 void FFT_Processor_Spqlios_Intl::execute_direct_torus64_add(uint64_t *res, double *a) {
     auto *tables = (const INTL_FFT_PRECOMP*)tables_direct;
     intl_fft_from(tables, a, real_inout_direct);
-    const double magic = 6755399441055744.0;
-    const int64_t magic_i = 0x4338000000000000LL;
-    for (int32_t i = 0; i < Ns2; i++) {
-        union { double d; int64_t l; } u;
-        u.d = real_inout_direct[2*i] + magic; res[i] += (uint64_t)(u.l - magic_i);
-        u.d = real_inout_direct[2*i+1] + magic; res[i+Ns2] += (uint64_t)(u.l - magic_i);
+    for (int32_t i = 0; i < Ns2; i += 4) {
+        __m256d v0 = _mm256_loadu_pd(real_inout_direct + 2*i);
+        __m256d v1 = _mm256_loadu_pd(real_inout_direct + 2*i + 4);
+        __m256d re = _mm256_permute4x64_pd(
+            _mm256_shuffle_pd(v0, v1, 0b0000), 0b11011000);
+        __m256d im = _mm256_permute4x64_pd(
+            _mm256_shuffle_pd(v0, v1, 0b1111), 0b11011000);
+        __m256i old_re = _mm256_loadu_si256((const __m256i*)(res + i));
+        __m256i old_im = _mm256_loadu_si256((const __m256i*)(res + i + Ns2));
+        _mm256_storeu_si256((__m256i*)(res + i),
+                            _mm256_add_epi64(old_re, f64_to_i64(re)));
+        _mm256_storeu_si256((__m256i*)(res + i + Ns2),
+                            _mm256_add_epi64(old_im, f64_to_i64(im)));
     }
 }
 

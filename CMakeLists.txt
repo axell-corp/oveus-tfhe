@@ -83,7 +83,7 @@ option(USE_MKL "Use Intel MKL" OFF)
 option(USE_FFTW3 "Use FFTW3" OFF)
 option(USE_SPQLIOX_AARCH64 "Use spqliox_aarch64" OFF)
 option(USE_SPQLIOS_ARITHMETIC "Use spqlios-arithmetic backend" OFF)
-option(USE_SPQLIOS_INTL "Use interleaved-format SPQLIOS" ${USE_AVX512_DEFAULT})
+option(USE_SPQLIOS_INTL "Use interleaved-format SPQLIOS" ON)
 option(USE_SPQLIOS_STOCKHAM "Use Stockham radix-4 SPQLIOS (split layout)" OFF)
 option(USE_HEXL "Use Intel HEXL" OFF)
 
