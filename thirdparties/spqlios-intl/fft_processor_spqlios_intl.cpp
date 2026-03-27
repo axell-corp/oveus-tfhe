@@ -399,177 +399,158 @@ static void stockham_r4(int32_t ns2, const double *trig, double *x, double *y) {
 
 #else  // AVX2
 
-// ── Stockham radix-4 FFT (AVX2) — separate fwd/inv, fused twist ────────────
-// Each YMM holds 2 complex values (4 doubles). j-loop steps by 2.
+// ── Stockham radix-4 DIF FFT (AVX2) ────────────────────────────────────────
+// Verified correct algorithm:
+//   Read:  src[p + s*(j + m*q)]  for m=0..3
+//   BF:    standard radix-4 DIF
+//   Twid:  exp(sign*2*pi*i * m * j * s / ns2)  applied AFTER butterfly to outputs m=1,2,3
+//   Write: dst[p + s*(m + 4*j)]  (auto-sort)
+//   Update: s *= 4, q /= 4
+//
+// Twiddle table layout (paired):
+//   For each pass, for pair k (j=2k, j=2k+1):
+//     w1: [cos(2k*angle), sin(2k*angle), cos((2k+1)*angle), sin((2k+1)*angle)]
+//     w2: same with 2*angle
+//     w3: same with 3*angle
+//   Total per pass: ceil(q/2) * 12 doubles
+//
+// For s=1: vectorize over j (step 2), 128-bit output stores.
+// For s>=4: vectorize over p (step 2), broadcast twiddle from paired table.
 
-// Forward Stockham: regular passes (no twist, called for all but last pass)
-static void stockham_r4_fwd_passes(int32_t ns2, const double *trig, double *x, double *y,
-                                    int32_t &q_out, int32_t &s_out, double *&cur_out, double *&dst_out) {
-    double *src = x, *dst = y;
-    const double *tw = trig;
+template<bool Fwd>
+static void stockham_r4_avx2(int32_t ns2, const double *bf_twiddles,
+                              double *x, double *scratch) {
+    double *src = x, *dst = scratch;
+    const double *tw = bf_twiddles;
     int32_t q = ns2 / 4, s = 1;
 
-    // j-multiply mask for forward: [-0.0, 0.0, -0.0, 0.0] (negate re after swap)
-    const __m256d jmask_fwd = _mm256_set_pd(0.0, -0.0, 0.0, -0.0);
+    // Radix-4 passes
+    while (q >= 1) {
+        int64_t arm_stride = (int64_t)s * q;  // = ns2/4
 
-    while (q >= 4) {
-        int32_t stride = q * s;
+        if (s == 1) {
+            // ── First pass (s=1): vectorize over j, step 2 ──────────────
+            // Each YMM holds complex values for (j, j+1).
+            // Source: src[j + m*q] adjacent → YMM load.
+            // Output: dst[m + 4*j] and dst[m + 4*(j+1)] are 4 apart → 128-bit stores.
+            for (int32_t j = 0; j < q; j += 2) {
+                __m256d a = _mm256_loadu_pd(src + (int64_t)j * 2);
+                __m256d b = _mm256_loadu_pd(src + (int64_t)(j + q) * 2);
+                __m256d c = _mm256_loadu_pd(src + (int64_t)(j + 2*q) * 2);
+                __m256d d = _mm256_loadu_pd(src + (int64_t)(j + 3*q) * 2);
 
-        // j=0 pass: no twiddle multiply
-        for (int32_t p = 0; p < q; p++) {
-            int32_t idx = s * p;
-            __m256d a = _mm256_loadu_pd(src + idx * 2);
-            __m256d b = _mm256_loadu_pd(src + (idx + stride) * 2);
-            __m256d c = _mm256_loadu_pd(src + (idx + 2*stride) * 2);
-            __m256d d = _mm256_loadu_pd(src + (idx + 3*stride) * 2);
-            __m256d apc = _mm256_add_pd(a, c);
-            __m256d amc = _mm256_sub_pd(a, c);
-            __m256d bpd = _mm256_add_pd(b, d);
-            __m256d jbmd = _mm256_xor_pd(_mm256_permute_pd(_mm256_sub_pd(b, d), 0b0101), jmask_fwd);
-            int32_t o = p;
-            _mm256_storeu_pd(dst + o * 2, _mm256_add_pd(apc, bpd));
-            _mm256_storeu_pd(dst + (o + q) * 2, _mm256_sub_pd(amc, jbmd));
-            _mm256_storeu_pd(dst + (o + 2*q) * 2, _mm256_sub_pd(apc, bpd));
-            _mm256_storeu_pd(dst + (o + 3*q) * 2, _mm256_add_pd(amc, jbmd));
-        }
+                __m256d apc = _mm256_add_pd(a, c);
+                __m256d amc = _mm256_sub_pd(a, c);
+                __m256d bpd = _mm256_add_pd(b, d);
+                __m256d bmd = _mm256_sub_pd(b, d);
+                __m256d jbmd = Fwd ? mul_j_fwd(bmd) : mul_j_inv(bmd);
 
-        // j=2,4,...,s-2 pass: with twiddle.
-        for (int32_t j = 2; j < s; j += 2) {
-            const double *twj = tw + (j/2) * 12;  // 3 twiddles × 4 doubles per j-pair
-            __m256d w1 = _mm256_loadu_pd(twj);
-            __m256d w2 = _mm256_loadu_pd(twj + 4);
-            __m256d w3 = _mm256_loadu_pd(twj + 8);
-            for (int32_t p = 0; p < q; p++) {
-                const double *sptr = src + (int64_t)(j + s * p) * 2;
-                double *dptr = dst + (int64_t)(p + q * (4 * j)) * 2;
-                __m256d a = _mm256_loadu_pd(sptr);
-                __m256d b = _mm256_loadu_pd(sptr + (int64_t)stride * 2);
-                __m256d c = _mm256_loadu_pd(sptr + (int64_t)2 * stride * 2);
-                __m256d d = _mm256_loadu_pd(sptr + (int64_t)3 * stride * 2);
-                __m256d r0, r1, r2, r3;
-                radix4_butterfly_fwd(a, b, c, d, w1, w2, w3, r0, r1, r2, r3);
-                _mm256_storeu_pd(dptr,                    r0);
-                _mm256_storeu_pd(dptr + (int64_t)q * 2,  r1);
-                _mm256_storeu_pd(dptr + (int64_t)2*q * 2, r2);
-                _mm256_storeu_pd(dptr + (int64_t)3*q * 2, r3);
+                __m256d r0 = _mm256_add_pd(apc, bpd);
+                __m256d r1 = _mm256_sub_pd(amc, jbmd);
+                __m256d r2 = _mm256_sub_pd(apc, bpd);
+                __m256d r3 = _mm256_add_pd(amc, jbmd);
+
+                // Load paired twiddle for (j, j+1) and apply.
+                // j=0 twiddle is (1,0) stored in the table, so multiply is harmless.
+                int32_t pair_k = j / 2;
+                __m256d tw1 = _mm256_loadu_pd(tw + pair_k * 12);
+                __m256d tw2 = _mm256_loadu_pd(tw + pair_k * 12 + 4);
+                __m256d tw3 = _mm256_loadu_pd(tw + pair_k * 12 + 8);
+                r1 = cmul(r1, tw1);
+                r2 = cmul(r2, tw2);
+                r3 = cmul(r3, tw3);
+
+                // Output: dst[m + 4*j] for j, dst[m + 4*(j+1)] for j+1
+                int64_t out_j0 = (int64_t)(4 * j) * 2;
+                int64_t out_j1 = (int64_t)(4 * (j+1)) * 2;
+                _mm_storeu_pd(dst + out_j0,     _mm256_castpd256_pd128(r0));
+                _mm_storeu_pd(dst + out_j1,     _mm256_extractf128_pd(r0, 1));
+                _mm_storeu_pd(dst + out_j0 + 2, _mm256_castpd256_pd128(r1));
+                _mm_storeu_pd(dst + out_j1 + 2, _mm256_extractf128_pd(r1, 1));
+                _mm_storeu_pd(dst + out_j0 + 4, _mm256_castpd256_pd128(r2));
+                _mm_storeu_pd(dst + out_j1 + 4, _mm256_extractf128_pd(r2, 1));
+                _mm_storeu_pd(dst + out_j0 + 6, _mm256_castpd256_pd128(r3));
+                _mm_storeu_pd(dst + out_j1 + 6, _mm256_extractf128_pd(r3, 1));
             }
+            tw += (q / 2) * 12;  // q/2 pairs
+        } else {
+            // ── General passes (s>=4): vectorize over p, step 2 ─────────
+            // Each YMM holds (p, p+1). Twiddle broadcast from paired table.
+            for (int32_t j = 0; j < q; j++) {
+                __m256d w1, w2, w3;
+                bool has_twiddle = (j != 0);
+                if (has_twiddle) {
+                    // Twiddles in paired format. Extract the lane for this j.
+                    int32_t pair_k = j / 2;
+                    const double *twp = tw + pair_k * 12;
+                    __m256d p1 = _mm256_loadu_pd(twp);
+                    __m256d p2 = _mm256_loadu_pd(twp + 4);
+                    __m256d p3 = _mm256_loadu_pd(twp + 8);
+                    if (j % 2 == 0) {
+                        w1 = _mm256_permute2f128_pd(p1, p1, 0x00);
+                        w2 = _mm256_permute2f128_pd(p2, p2, 0x00);
+                        w3 = _mm256_permute2f128_pd(p3, p3, 0x00);
+                    } else {
+                        w1 = _mm256_permute2f128_pd(p1, p1, 0x11);
+                        w2 = _mm256_permute2f128_pd(p2, p2, 0x11);
+                        w3 = _mm256_permute2f128_pd(p3, p3, 0x11);
+                    }
+                }
+
+                int64_t base_in = (int64_t)s * j;
+                int64_t base_out = (int64_t)s * 4 * j;
+                int64_t stride_s = (int64_t)s;
+
+                for (int32_t p = 0; p < s; p += 2) {
+                    const double *sp = src + (base_in + p) * 2;
+                    __m256d a = _mm256_loadu_pd(sp);
+                    __m256d b = _mm256_loadu_pd(sp + arm_stride * 2);
+                    __m256d c = _mm256_loadu_pd(sp + arm_stride * 4);
+                    __m256d d = _mm256_loadu_pd(sp + arm_stride * 6);
+
+                    __m256d apc = _mm256_add_pd(a, c);
+                    __m256d amc = _mm256_sub_pd(a, c);
+                    __m256d bpd = _mm256_add_pd(b, d);
+                    __m256d bmd = _mm256_sub_pd(b, d);
+                    __m256d jbmd = Fwd ? mul_j_fwd(bmd) : mul_j_inv(bmd);
+
+                    __m256d r0 = _mm256_add_pd(apc, bpd);
+                    __m256d r1 = _mm256_sub_pd(amc, jbmd);
+                    __m256d r2 = _mm256_sub_pd(apc, bpd);
+                    __m256d r3 = _mm256_add_pd(amc, jbmd);
+
+                    if (has_twiddle) {
+                        r1 = cmul(r1, w1);
+                        r2 = cmul(r2, w2);
+                        r3 = cmul(r3, w3);
+                    }
+
+                    double *dp = dst + (base_out + p) * 2;
+                    _mm256_storeu_pd(dp,                    r0);
+                    _mm256_storeu_pd(dp + stride_s * 2,     r1);
+                    _mm256_storeu_pd(dp + stride_s * 4,     r2);
+                    _mm256_storeu_pd(dp + stride_s * 6,     r3);
+                }
+            }
+            tw += ((q + 1) / 2) * 12;  // ceil(q/2) pairs
         }
-        // Advance twiddle pointer past this pass
-        tw += (s < 2 ? 1 : s / 2) * 12;
+
         double *tmp = src; src = dst; dst = tmp;
         s *= 4; q /= 4;
     }
-    q_out = q; s_out = s; cur_out = src; dst_out = dst;
-}
 
-// Forward: last pass without twist (twist done separately for better perf)
-static void stockham_fwd_last(int32_t ns2, int32_t q, int32_t s,
-                               double *src, double *dst) {
-    if (q == 1) {
-        for (int32_t j = 0; j < s; j += 2) {
-            __m256d a = _mm256_loadu_pd(src + j * 2);
-            __m256d b = _mm256_loadu_pd(src + (j + s) * 2);
-            __m256d c = _mm256_loadu_pd(src + (j + 2*s) * 2);
-            __m256d d = _mm256_loadu_pd(src + (j + 3*s) * 2);
-            __m256d r0, r1, r2, r3;
-            radix4_last_butterfly_fwd(a, b, c, d, r0, r1, r2, r3);
-            _mm256_storeu_pd(dst + (4*j) * 2, r0);
-            _mm256_storeu_pd(dst + (4*j+1) * 2, r1);
-            _mm256_storeu_pd(dst + (4*j+2) * 2, r2);
-            _mm256_storeu_pd(dst + (4*j+3) * 2, r3);
+    // Radix-2 final pass if ns2 is 2*4^k (e.g., 512 = 2*256)
+    if (s < ns2) {
+        for (int32_t p = 0; p < s; p += 2) {
+            __m256d a = _mm256_loadu_pd(src + p * 2);
+            __m256d b = _mm256_loadu_pd(src + (p + s) * 2);
+            _mm256_storeu_pd(dst + p * 2, _mm256_add_pd(a, b));
+            _mm256_storeu_pd(dst + (p + s) * 2, _mm256_sub_pd(a, b));
         }
-    } else if (q == 2) {
-        int32_t half = ns2 / 2;
-        for (int32_t j = 0; j < half; j += 2) {
-            __m256d a = _mm256_loadu_pd(src + j * 2);
-            __m256d b = _mm256_loadu_pd(src + (j + half) * 2);
-            _mm256_storeu_pd(dst + (2*j) * 2, _mm256_add_pd(a, b));
-            _mm256_storeu_pd(dst + (2*j+1) * 2, _mm256_sub_pd(a, b));
-        }
+        double *tmp = src; src = dst; dst = tmp;
     }
-}
 
-// Inverse: fused first pass + twist
-static void stockham_inv_first_twist(int32_t ns2, const double *tw_twist, const double *tw_bf,
-                                      double *src, double *dst) {
-    int32_t q = ns2 / 4, s = 1;
-    int32_t stride = q * s;
-    // j=0..s-1 (s=1 so just j=0), process 2 complex at a time
-    // Apply twist to inputs before butterfly
-    for (int32_t p = 0; p < q; p++) {
-        int32_t idx = p;
-        __m256d a = cmul(_mm256_loadu_pd(src + idx * 2),
-                         _mm256_loadu_pd(tw_twist + idx * 2));
-        __m256d b = cmul(_mm256_loadu_pd(src + (idx + stride) * 2),
-                         _mm256_loadu_pd(tw_twist + (idx + stride) * 2));
-        __m256d c = cmul(_mm256_loadu_pd(src + (idx + 2*stride) * 2),
-                         _mm256_loadu_pd(tw_twist + (idx + 2*stride) * 2));
-        __m256d d = cmul(_mm256_loadu_pd(src + (idx + 3*stride) * 2),
-                         _mm256_loadu_pd(tw_twist + (idx + 3*stride) * 2));
-        int32_t o = p;
-        __m256d r0, r1, r2, r3;
-        radix4_last_butterfly_inv(a, b, c, d, r0, r1, r2, r3);
-        _mm256_storeu_pd(dst + o * 2, r0);
-        _mm256_storeu_pd(dst + (o + q) * 2, r1);
-        _mm256_storeu_pd(dst + (o + 2*q) * 2, r2);
-        _mm256_storeu_pd(dst + (o + 3*q) * 2, r3);
-    }
-}
-
-// Inverse Stockham: remaining passes after fused first
-static void stockham_r4_inv_remaining(int32_t ns2, int32_t q, int32_t s,
-                                       const double *tw, double *cur, double *dst) {
-    while (q >= 4) {
-        int32_t stride = q * s;
-        for (int32_t j = 0; j < s; j += 2) {
-            __m256d w1 = _mm256_loadu_pd(tw); tw += 4;
-            __m256d w2 = _mm256_loadu_pd(tw); tw += 4;
-            __m256d w3 = _mm256_loadu_pd(tw); tw += 4;
-            for (int32_t p = 0; p < q; p++) {
-                int32_t idx = j + s * p;
-                __m256d a = _mm256_loadu_pd(cur + idx * 2);
-                __m256d b = _mm256_loadu_pd(cur + (idx + stride) * 2);
-                __m256d c = _mm256_loadu_pd(cur + (idx + 2*stride) * 2);
-                __m256d d = _mm256_loadu_pd(cur + (idx + 3*stride) * 2);
-                int32_t o = p + q * (4 * j);
-                __m256d r0, r1, r2, r3;
-                radix4_butterfly_inv(a, b, c, d, w1, w2, w3, r0, r1, r2, r3);
-                _mm256_storeu_pd(dst + o * 2, r0);
-                _mm256_storeu_pd(dst + (o + q) * 2, r1);
-                _mm256_storeu_pd(dst + (o + 2*q) * 2, r2);
-                _mm256_storeu_pd(dst + (o + 3*q) * 2, r3);
-            }
-        }
-        double *tmp = cur; cur = dst; dst = tmp;
-        s *= 4; q /= 4;
-    }
-    // Final q=1 or q=2
-    if (q == 1) {
-        for (int32_t j = 0; j < s; j += 2) {
-            __m256d a = _mm256_loadu_pd(cur + j * 2);
-            __m256d b = _mm256_loadu_pd(cur + (j + s) * 2);
-            __m256d c = _mm256_loadu_pd(cur + (j + 2*s) * 2);
-            __m256d d = _mm256_loadu_pd(cur + (j + 3*s) * 2);
-            __m256d r0, r1, r2, r3;
-            radix4_last_butterfly_inv(a, b, c, d, r0, r1, r2, r3);
-            _mm256_storeu_pd(dst + (4*j) * 2, r0);
-            _mm256_storeu_pd(dst + (4*j+1) * 2, r1);
-            _mm256_storeu_pd(dst + (4*j+2) * 2, r2);
-            _mm256_storeu_pd(dst + (4*j+3) * 2, r3);
-        }
-        double *tmp = cur; cur = dst; dst = tmp;
-    } else if (q == 2) {
-        int32_t half = ns2 / 2;
-        for (int32_t j = 0; j < half; j += 2) {
-            __m256d a = _mm256_loadu_pd(cur + j * 2);
-            __m256d b = _mm256_loadu_pd(cur + (j + half) * 2);
-            _mm256_storeu_pd(dst + (2*j) * 2, _mm256_add_pd(a, b));
-            _mm256_storeu_pd(dst + (2*j+1) * 2, _mm256_sub_pd(a, b));
-        }
-        double *tmp = cur; cur = dst; dst = tmp;
-    }
-    // cur points to result. If not in x, copy.
-    // (caller handles this)
+    if (src != x) memcpy(x, src, ns2 * 2 * sizeof(double));
 }
 
 #endif  // USE_AVX512
@@ -597,20 +578,22 @@ static void intl_fft_from(const INTL_FFT_PRECOMP *tables, const double *src_in,
         _mm512_store_pd(p, cmul512(a, w));
     }
 #else
-    // AVX2: Stockham radix-4 with separate forward/inverse (no bool branch)
+    // AVX2: copy input, run Stockham, then twist
     if (src_in != c) memcpy(c, src_in, ns2 * 2 * sizeof(double));
-    int32_t q, s;
-    double *cur, *dst;
-    stockham_r4_fwd_passes(ns2, trig, c, tables->scratch, q, s, cur, dst);
+    stockham_r4_avx2<true>(ns2, trig, c, tables->scratch);
 
-    // Final pass (q=1 or q=2)
-    stockham_fwd_last(ns2, q, s, cur, dst);
-    if (dst != c) memcpy(c, dst, ns2 * 2 * sizeof(double));
-
-    // Separate twist pass (well-vectorized sequential access)
+    // Advance past butterfly twiddles to reach the twist table
     const double *tw_twist = trig;
-    for (int32_t ss = 1; 4*ss < ns2; ss *= 4)
-        tw_twist += (ss < 2 ? 1 : ss / 2) * 12;
+    {
+        int32_t ss = 1, qq = ns2 / 4;
+        while (qq >= 1) {
+            if (ss == 1)
+                tw_twist += (qq / 2) * 12;         // q/2 pairs
+            else
+                tw_twist += ((qq + 1) / 2) * 12;   // ceil(q/2) pairs
+            ss *= 4; qq /= 4;
+        }
+    }
 
     for (int32_t j = 0; j < ns2; j += 2) {
         double *p = c + j * 2;
@@ -641,7 +624,7 @@ static void intl_ifft(const INTL_FFT_PRECOMP *tables, double *c) {
     const double *tw_bf = trig + ns2 * 2;
     stockham_r4<false>(ns2, tw_bf, c, tables->scratch);
 #else
-    // AVX2: Separate twist + Stockham inverse with hand-tuned butterfly
+    // AVX2: Separate twist + Stockham inverse
     for (int32_t j = 0; j < ns2; j += 2) {
         double *p = c + j * 2;
         __m256d a = _mm256_load_pd(p);
@@ -650,83 +633,7 @@ static void intl_ifft(const INTL_FFT_PRECOMP *tables, double *c) {
     }
 
     const double *tw_bf = trig + ns2 * 2;
-    double *src = c, *dst = tables->scratch;
-    const double *tw = tw_bf;
-    int32_t q = ns2 / 4, s = 1;
-    const __m256d jmask_inv = _mm256_set_pd(-0.0, 0.0, -0.0, 0.0); // inverse j-multiply
-
-    while (q >= 4) {
-        int32_t stride = q * s;
-
-        // j=0: no twiddle
-        for (int32_t p = 0; p < q; p++) {
-            int32_t idx = s * p;
-            __m256d va = _mm256_loadu_pd(src + idx * 2);
-            __m256d vb = _mm256_loadu_pd(src + (idx + stride) * 2);
-            __m256d vc = _mm256_loadu_pd(src + (idx + 2*stride) * 2);
-            __m256d vd = _mm256_loadu_pd(src + (idx + 3*stride) * 2);
-            __m256d apc = _mm256_add_pd(va, vc);
-            __m256d amc = _mm256_sub_pd(va, vc);
-            __m256d bpd = _mm256_add_pd(vb, vd);
-            __m256d jbmd = _mm256_xor_pd(_mm256_permute_pd(_mm256_sub_pd(vb, vd), 0b0101), jmask_inv);
-            int32_t o = p;
-            _mm256_storeu_pd(dst + o * 2, _mm256_add_pd(apc, bpd));
-            _mm256_storeu_pd(dst + (o + q) * 2, _mm256_sub_pd(amc, jbmd));
-            _mm256_storeu_pd(dst + (o + 2*q) * 2, _mm256_sub_pd(apc, bpd));
-            _mm256_storeu_pd(dst + (o + 3*q) * 2, _mm256_add_pd(amc, jbmd));
-        }
-
-        // j=2,4,...: with twiddle.
-        for (int32_t j = 2; j < s; j += 2) {
-            const double *twj = tw + (j/2) * 12;
-            __m256d w1 = _mm256_loadu_pd(twj);
-            __m256d w2 = _mm256_loadu_pd(twj + 4);
-            __m256d w3 = _mm256_loadu_pd(twj + 8);
-            for (int32_t p = 0; p < q; p++) {
-                const double *sptr = src + (int64_t)(j + s * p) * 2;
-                double *dptr = dst + (int64_t)(p + q * (4 * j)) * 2;
-                __m256d a = _mm256_loadu_pd(sptr);
-                __m256d b = _mm256_loadu_pd(sptr + (int64_t)stride * 2);
-                __m256d c = _mm256_loadu_pd(sptr + (int64_t)2 * stride * 2);
-                __m256d d = _mm256_loadu_pd(sptr + (int64_t)3 * stride * 2);
-                __m256d r0, r1, r2, r3;
-                radix4_butterfly_inv(a, b, c, d, w1, w2, w3, r0, r1, r2, r3);
-                _mm256_storeu_pd(dptr,                    r0);
-                _mm256_storeu_pd(dptr + (int64_t)q * 2,  r1);
-                _mm256_storeu_pd(dptr + (int64_t)2*q * 2, r2);
-                _mm256_storeu_pd(dptr + (int64_t)3*q * 2, r3);
-            }
-        }
-        tw += (s < 2 ? 1 : s / 2) * 12;
-        double *tmp = src; src = dst; dst = tmp;
-        s *= 4; q /= 4;
-    }
-    // Final pass
-    if (q == 1) {
-        for (int32_t j = 0; j < s; j += 2) {
-            __m256d va = _mm256_loadu_pd(src + j * 2);
-            __m256d vb = _mm256_loadu_pd(src + (j + s) * 2);
-            __m256d vc = _mm256_loadu_pd(src + (j + 2*s) * 2);
-            __m256d vd = _mm256_loadu_pd(src + (j + 3*s) * 2);
-            __m256d r0, r1, r2, r3;
-            radix4_last_butterfly_inv(va, vb, vc, vd, r0, r1, r2, r3);
-            _mm256_storeu_pd(dst + (4*j) * 2, r0);
-            _mm256_storeu_pd(dst + (4*j+1) * 2, r1);
-            _mm256_storeu_pd(dst + (4*j+2) * 2, r2);
-            _mm256_storeu_pd(dst + (4*j+3) * 2, r3);
-        }
-        double *tmp = src; src = dst; dst = tmp;
-    } else if (q == 2) {
-        int32_t half = ns2 / 2;
-        for (int32_t j = 0; j < half; j += 2) {
-            __m256d va = _mm256_loadu_pd(src + j * 2);
-            __m256d vb = _mm256_loadu_pd(src + (j + half) * 2);
-            _mm256_storeu_pd(dst + (2*j) * 2, _mm256_add_pd(va, vb));
-            _mm256_storeu_pd(dst + (2*j+1) * 2, _mm256_sub_pd(va, vb));
-        }
-        double *tmp = src; src = dst; dst = tmp;
-    }
-    if (src != c) memcpy(c, src, ns2 * 2 * sizeof(double));
+    stockham_r4_avx2<false>(ns2, tw_bf, c, tables->scratch);
 #endif
 }
 
@@ -747,10 +654,19 @@ static void build_tables(int32_t nn, INTL_FFT_PRECOMP *reps) {
         bf_twiddle_doubles += (s / 4) * 24;
     }
 #else
+    // AVX2: paired twiddle table. For each radix-4 pass:
+    //   s=1:    q/2 pairs * 12 doubles
+    //   s>=4:   ceil(q/2) pairs * 12 doubles
     int32_t bf_twiddle_doubles = 0;
-    for (int32_t s = 1; 4*s < ns2; s *= 4) {
-        int32_t groups = (s < 2) ? 1 : s / 2;
-        bf_twiddle_doubles += groups * 12;
+    {
+        int32_t ss = 1, qq = ns2 / 4;
+        while (qq >= 1) {
+            if (ss == 1)
+                bf_twiddle_doubles += (qq / 2) * 12;
+            else
+                bf_twiddle_doubles += ((qq + 1) / 2) * 12;
+            ss *= 4; qq /= 4;
+        }
     }
 #endif
 
@@ -831,29 +747,34 @@ static void build_tables(int32_t nn, INTL_FFT_PRECOMP *reps) {
     }
 
 #else  // AVX2
-    // Build forward butterfly twiddles
+    // Build forward butterfly twiddles.
+    // Correct twiddle angle: m * j * s / ns2  (in units of full turn)
+    // For each pass (s, q=ns2/(4*s)), store paired twiddles for (j=2k, j=2k+1).
+    // Forward: negative angle (exp(-2*pi*i * m * j * s / ns2)).
     double *fwd = reps->trig_fwd;
-    for (int32_t s = 1; 4*s < ns2; s *= 4) {
-        for (int32_t j = 0; j < s; j += 2) {
-            int32_t denom = 4 * s;
-            for (int32_t jj = 0; jj < 2 && (j + jj) < s; jj++) {
-                fwd[0 + jj*2] = accurate_cos(-(j+jj), denom);
-                fwd[1 + jj*2] = accurate_sin(-(j+jj), denom);
+    {
+        int32_t ss = 1, qq = ns2 / 4;
+        while (qq >= 1) {
+            int32_t npairs = (ss == 1) ? (qq / 2) : ((qq + 1) / 2);
+            for (int32_t k = 0; k < npairs; k++) {
+                int32_t j0 = 2 * k;
+                int32_t j1 = 2 * k + 1;
+                // angle_j = j * ss (numerator), denom = ns2
+                // w_m = exp(-2*pi*i * m * j * ss / ns2) = accurate_cos(-m*j*ss, ns2)
+                for (int32_t m = 1; m <= 3; m++) {
+                    fwd[0] = accurate_cos(-m * j0 * ss, ns2);
+                    fwd[1] = accurate_sin(-m * j0 * ss, ns2);
+                    if (j1 < qq) {
+                        fwd[2] = accurate_cos(-m * j1 * ss, ns2);
+                        fwd[3] = accurate_sin(-m * j1 * ss, ns2);
+                    } else {
+                        fwd[2] = fwd[0];  // pad with copy of j0
+                        fwd[3] = fwd[1];
+                    }
+                    fwd += 4;
+                }
             }
-            if (s == 1) { fwd[2] = fwd[0]; fwd[3] = fwd[1]; }
-            fwd += 4;
-            for (int32_t jj = 0; jj < 2 && (j + jj) < s; jj++) {
-                fwd[0 + jj*2] = accurate_cos(-2*(j+jj), denom);
-                fwd[1 + jj*2] = accurate_sin(-2*(j+jj), denom);
-            }
-            if (s == 1) { fwd[2] = fwd[0]; fwd[3] = fwd[1]; }
-            fwd += 4;
-            for (int32_t jj = 0; jj < 2 && (j + jj) < s; jj++) {
-                fwd[0 + jj*2] = accurate_cos(-3*(j+jj), denom);
-                fwd[1 + jj*2] = accurate_sin(-3*(j+jj), denom);
-            }
-            if (s == 1) { fwd[2] = fwd[0]; fwd[3] = fwd[1]; }
-            fwd += 4;
+            ss *= 4; qq /= 4;
         }
     }
     // Forward twist: bake in scale factor 2/N so execute_direct can skip scaling
@@ -865,32 +786,34 @@ static void build_tables(int32_t nn, INTL_FFT_PRECOMP *reps) {
         }
     }
 
+    // Build inverse twiddles: twist first, then butterfly twiddles.
     double *inv = reps->trig_inv;
     for (int32_t k = 0; k < ns2; k++) {
         *inv++ = accurate_cos(k, n);
         *inv++ = accurate_sin(k, n);
     }
-    for (int32_t s = 1; 4*s < ns2; s *= 4) {
-        for (int32_t j = 0; j < s; j += 2) {
-            int32_t denom = 4 * s;
-            for (int32_t jj = 0; jj < 2 && (j + jj) < s; jj++) {
-                inv[0 + jj*2] = accurate_cos(j+jj, denom);
-                inv[1 + jj*2] = accurate_sin(j+jj, denom);
+    // Inverse butterfly twiddles: positive angle.
+    {
+        int32_t ss = 1, qq = ns2 / 4;
+        while (qq >= 1) {
+            int32_t npairs = (ss == 1) ? (qq / 2) : ((qq + 1) / 2);
+            for (int32_t k = 0; k < npairs; k++) {
+                int32_t j0 = 2 * k;
+                int32_t j1 = 2 * k + 1;
+                for (int32_t m = 1; m <= 3; m++) {
+                    inv[0] = accurate_cos(m * j0 * ss, ns2);
+                    inv[1] = accurate_sin(m * j0 * ss, ns2);
+                    if (j1 < qq) {
+                        inv[2] = accurate_cos(m * j1 * ss, ns2);
+                        inv[3] = accurate_sin(m * j1 * ss, ns2);
+                    } else {
+                        inv[2] = inv[0];
+                        inv[3] = inv[1];
+                    }
+                    inv += 4;
+                }
             }
-            if (s == 1) { inv[2] = inv[0]; inv[3] = inv[1]; }
-            inv += 4;
-            for (int32_t jj = 0; jj < 2 && (j + jj) < s; jj++) {
-                inv[0 + jj*2] = accurate_cos(2*(j+jj), denom);
-                inv[1 + jj*2] = accurate_sin(2*(j+jj), denom);
-            }
-            if (s == 1) { inv[2] = inv[0]; inv[3] = inv[1]; }
-            inv += 4;
-            for (int32_t jj = 0; jj < 2 && (j + jj) < s; jj++) {
-                inv[0 + jj*2] = accurate_cos(3*(j+jj), denom);
-                inv[1 + jj*2] = accurate_sin(3*(j+jj), denom);
-            }
-            if (s == 1) { inv[2] = inv[0]; inv[3] = inv[1]; }
-            inv += 4;
+            ss *= 4; qq /= 4;
         }
     }
 #endif  // USE_AVX512
