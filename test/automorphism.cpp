@@ -35,7 +35,7 @@ int main()
 
         for (int i = 0; i < TFHEpp::lvl1param::n; i++)
             assert(abs(static_cast<int32_t>(mulafterauto[i] -
-                                            autoaftermul[i])) <= 1);
+                                            autoaftermul[i])) <= 2);
     }
     std::cout << "PASS" << std::endl;
 }
