@@ -7,6 +7,7 @@
 #include <cereal/types/unordered_map.hpp>
 #include <cereal/types/vector.hpp>
 #include <iostream>
+#include <type_traits>
 #include <tuple>
 
 #include "evalkeygens.hpp"
@@ -15,6 +16,148 @@ namespace TFHEpp {
 
 struct EvalKey {
     lweParams params;
+
+    static constexpr std::size_t BkBaseCount = 4;
+#ifdef ENABLE_AXELL
+    static constexpr std::size_t BkAxellCount = 1;
+#else
+    static constexpr std::size_t BkAxellCount = 0;
+#endif
+#ifdef USE_DIFFERENT_BR_PARAM
+    static constexpr std::size_t BrParamExtraCount = 2;
+#else
+    static constexpr std::size_t BrParamExtraCount = 0;
+#endif
+    static constexpr std::size_t BkAxellIndex = BkBaseCount;
+    static constexpr std::size_t BkFFTBaseIndex =
+        BkBaseCount + BkAxellCount + BrParamExtraCount;
+    static constexpr std::size_t BkFFTAxellIndex = BkFFTBaseIndex + BkBaseCount;
+    static constexpr std::size_t BkNTTBaseIndex =
+        BkFFTBaseIndex + BkBaseCount + BkAxellCount + BrParamExtraCount;
+    static constexpr std::size_t BkNTTAxellIndex = BkNTTBaseIndex + BkBaseCount;
+
+    template <class P>
+    auto& getbkptr()
+    {
+        if constexpr (std::is_same_v<P, lvl01param>)
+            return std::get<0>(keys);
+        else if constexpr (std::is_same_v<P, lvlh1param>)
+            return std::get<1>(keys);
+        else if constexpr (std::is_same_v<P, lvl02param>)
+            return std::get<2>(keys);
+        else if constexpr (std::is_same_v<P, lvlh2param>)
+            return std::get<3>(keys);
+#ifdef ENABLE_AXELL
+        else if constexpr (std::is_same_v<P, lvl0Mparam>)
+        {
+            if constexpr (std::is_same_v<BootstrappingKey<lvl0Mparam>,
+                                         BootstrappingKey<lvl01param>>)
+                return std::get<0>(keys);
+            else
+                return std::get<BkAxellIndex>(keys);
+        }
+#endif
+        else if constexpr (std::is_same_v<P, cblvl02param>)
+        {
+            if constexpr (std::is_same_v<BootstrappingKey<cblvl02param>,
+                                         BootstrappingKey<lvl02param>>)
+                return std::get<2>(keys);
+            else
+                return std::get<BkAxellIndex + BkAxellCount>(keys);
+        }
+        else if constexpr (std::is_same_v<P, cblvlh2param>)
+        {
+            if constexpr (std::is_same_v<BootstrappingKey<cblvlh2param>,
+                                         BootstrappingKey<lvlh2param>>)
+                return std::get<3>(keys);
+            else
+                return std::get<BkAxellIndex + BkAxellCount + 1>(keys);
+        }
+        else
+            static_assert(!sizeof(P), "Unsupported bootstrapping key param");
+    }
+
+    template <class P>
+    auto& getbkfftptr()
+    {
+        if constexpr (std::is_same_v<P, lvl01param>)
+            return std::get<BkFFTBaseIndex + 0>(keys);
+        else if constexpr (std::is_same_v<P, lvlh1param>)
+            return std::get<BkFFTBaseIndex + 1>(keys);
+        else if constexpr (std::is_same_v<P, lvl02param>)
+            return std::get<BkFFTBaseIndex + 2>(keys);
+        else if constexpr (std::is_same_v<P, lvlh2param>)
+            return std::get<BkFFTBaseIndex + 3>(keys);
+#ifdef ENABLE_AXELL
+        else if constexpr (std::is_same_v<P, lvl0Mparam>)
+        {
+            if constexpr (std::is_same_v<BootstrappingKeyFFT<lvl0Mparam>,
+                                         BootstrappingKeyFFT<lvl01param>>)
+                return std::get<BkFFTBaseIndex + 0>(keys);
+            else
+                return std::get<BkFFTAxellIndex>(keys);
+        }
+#endif
+        else if constexpr (std::is_same_v<P, cblvl02param>)
+        {
+            if constexpr (std::is_same_v<BootstrappingKeyFFT<cblvl02param>,
+                                         BootstrappingKeyFFT<lvl02param>>)
+                return std::get<BkFFTBaseIndex + 2>(keys);
+            else
+                return std::get<BkFFTAxellIndex + BkAxellCount>(keys);
+        }
+        else if constexpr (std::is_same_v<P, cblvlh2param>)
+        {
+            if constexpr (std::is_same_v<BootstrappingKeyFFT<cblvlh2param>,
+                                         BootstrappingKeyFFT<lvlh2param>>)
+                return std::get<BkFFTBaseIndex + 3>(keys);
+            else
+                return std::get<BkFFTAxellIndex + BkAxellCount + 1>(keys);
+        }
+        else
+            static_assert(!sizeof(P), "Unsupported bootstrapping key FFT param");
+    }
+
+    template <class P>
+    auto& getbknttptr()
+    {
+        if constexpr (std::is_same_v<P, lvl01param>)
+            return std::get<BkNTTBaseIndex + 0>(keys);
+        else if constexpr (std::is_same_v<P, lvlh1param>)
+            return std::get<BkNTTBaseIndex + 1>(keys);
+        else if constexpr (std::is_same_v<P, lvl02param>)
+            return std::get<BkNTTBaseIndex + 2>(keys);
+        else if constexpr (std::is_same_v<P, lvlh2param>)
+            return std::get<BkNTTBaseIndex + 3>(keys);
+#ifdef ENABLE_AXELL
+        else if constexpr (std::is_same_v<P, lvl0Mparam>)
+        {
+            if constexpr (std::is_same_v<BootstrappingKeyNTT<lvl0Mparam>,
+                                         BootstrappingKeyNTT<lvl01param>>)
+                return std::get<BkNTTBaseIndex + 0>(keys);
+            else
+                return std::get<BkNTTAxellIndex>(keys);
+        }
+#endif
+        else if constexpr (std::is_same_v<P, cblvl02param>)
+        {
+            if constexpr (std::is_same_v<BootstrappingKeyNTT<cblvl02param>,
+                                         BootstrappingKeyNTT<lvl02param>>)
+                return std::get<BkNTTBaseIndex + 2>(keys);
+            else
+                return std::get<BkNTTAxellIndex + BkAxellCount>(keys);
+        }
+        else if constexpr (std::is_same_v<P, cblvlh2param>)
+        {
+            if constexpr (std::is_same_v<BootstrappingKeyNTT<cblvlh2param>,
+                                         BootstrappingKeyNTT<lvlh2param>>)
+                return std::get<BkNTTBaseIndex + 3>(keys);
+            else
+                return std::get<BkNTTAxellIndex + BkAxellCount + 1>(keys);
+        }
+        else
+            static_assert(!sizeof(P), "Unsupported bootstrapping key NTT param");
+    }
 
     std::tuple<
         std::shared_ptr<BootstrappingKey<lvl01param>>,
@@ -106,52 +249,52 @@ struct EvalKey {
     template <class P>
     void emplacebk(const SecretKey& sk)
     {
-        if (get<BootstrappingKey<P>>() != nullptr) return;
-        get<BootstrappingKey<P>>() =
-            std::make_unique_for_overwrite<BootstrappingKey<P>>();
-        bkgen<P>(*get<BootstrappingKey<P>>(), sk);
+        auto& bk = getbkptr<P>();
+        if (bk != nullptr) return;
+        bk = std::make_unique_for_overwrite<BootstrappingKey<P>>();
+        bkgen<P>(*bk, sk);
     }
 
     template <class P>
     void emplacebkfft(const SecretKey& sk)
     {
-        if (get<BootstrappingKeyFFT<P>>() != nullptr) return;
-        get<BootstrappingKeyFFT<P>>() =
-            std::make_unique_for_overwrite<BootstrappingKeyFFT<P>>();
-        bkfftgen<P>(*get<BootstrappingKeyFFT<P>>(), sk);
+        auto& bkfft = getbkfftptr<P>();
+        if (bkfft != nullptr) return;
+        bkfft = std::make_unique_for_overwrite<BootstrappingKeyFFT<P>>();
+        bkfftgen<P>(*bkfft, sk);
     }
 
     template <class P>
     void emplacebkntt(const SecretKey& sk)
     {
-        if (get<BootstrappingKeyNTT<P>>() != nullptr) return;
-        get<BootstrappingKeyNTT<P>>() =
-            std::make_unique_for_overwrite<BootstrappingKeyNTT<P>>();
-        bknttgen<P>(*get<BootstrappingKeyNTT<P>>(), sk);
+        auto& bkntt = getbknttptr<P>();
+        if (bkntt != nullptr) return;
+        bkntt = std::make_unique_for_overwrite<BootstrappingKeyNTT<P>>();
+        bknttgen<P>(*bkntt, sk);
     }
 
     template <class P>
     void emplacebk2bkfft()
     {
-        if (get<BootstrappingKeyFFT<P>>() != nullptr) return;
-        get<BootstrappingKeyFFT<P>>() =
-            std::make_unique_for_overwrite<BootstrappingKeyFFT<P>>();
+        auto& bk = getbkptr<P>();
+        auto& bkfft = getbkfftptr<P>();
+        if (bkfft != nullptr) return;
+        bkfft = std::make_unique_for_overwrite<BootstrappingKeyFFT<P>>();
         for (int i = 0; i < P::domainP::n; i++)
-            (*get<BootstrappingKeyFFT<P>>())[i][0] =
-                ApplyFFT2trgsw<typename P::targetP>(
-                    (*get<BootstrappingKey<P>>())[i][0]);
+            (*bkfft)[i][0] =
+                ApplyFFT2trgsw<typename P::targetP>((*bk)[i][0]);
     }
 
     template <class P>
     void emplacebk2bkntt()
     {
-        if (get<BootstrappingKeyNTT<P>>() != nullptr) return;
-        get<BootstrappingKeyNTT<P>>() =
-            std::make_unique_for_overwrite<BootstrappingKeyNTT<P>>();
+        auto& bk = getbkptr<P>();
+        auto& bkntt = getbknttptr<P>();
+        if (bkntt != nullptr) return;
+        bkntt = std::make_unique_for_overwrite<BootstrappingKeyNTT<P>>();
         for (int i = 0; i < P::domainP::n; i++)
-            (*get<BootstrappingKeyNTT<P>>())[i] =
-                ApplyNTT2trgsw<typename P::targetP>(
-                    (*get<BootstrappingKey<P>>())[i][0]);
+            (*bkntt)[i] =
+                ApplyNTT2trgsw<typename P::targetP>((*bk)[i][0]);
     }
 
     template <class P>
@@ -256,19 +399,19 @@ struct EvalKey {
     template <class P>
     BootstrappingKey<P>& getbk() const
     {
-        return *const_cast<EvalKey*>(this)->get<BootstrappingKey<P>>();
+        return *const_cast<EvalKey*>(this)->getbkptr<P>();
     }
 
     template <class P>
     BootstrappingKeyFFT<P>& getbkfft() const
     {
-        return *const_cast<EvalKey*>(this)->get<BootstrappingKeyFFT<P>>();
+        return *const_cast<EvalKey*>(this)->getbkfftptr<P>();
     }
 
     template <class P>
     BootstrappingKeyNTT<P>& getbkntt() const
     {
-        return *const_cast<EvalKey*>(this)->get<BootstrappingKeyNTT<P>>();
+        return *const_cast<EvalKey*>(this)->getbknttptr<P>();
     }
 
     template <class P>

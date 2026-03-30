@@ -23,12 +23,17 @@ struct lvlMparam {
     // static constexpr T μ = 0x15555555;
     static constexpr std::make_signed_t<T> μ =
         (1LL << std::numeric_limits<typename lvlMparam::T>::digits) / 12;
+    static constexpr std::uint32_t l̅ = 1;
+    static constexpr std::uint32_t l̅ₐ = l̅;
+    static constexpr std::uint32_t B̅gbit = std::numeric_limits<T>::digits;
+    static constexpr std::uint32_t B̅gₐbit = B̅gbit;
 };
 #elif defined(USE_CGGI19)
 // IGG19.hpp
 struct lvlMparam {
     static constexpr std::uint32_t nbit = 10;
     static constexpr std::uint32_t n = 1 << nbit;
+    static constexpr std::uint32_t k = 1;
     static constexpr std::uint32_t l = 3;
     static constexpr std::uint32_t lₐ = 3;
     static constexpr std::uint32_t Bgbit = 7;
@@ -47,6 +52,10 @@ struct lvlMparam {
     static constexpr double Δ =
         static_cast<double>(1ULL << std::numeric_limits<T>::digits) /
         plain_modulus;
+    static constexpr std::uint32_t l̅ = 1;
+    static constexpr std::uint32_t l̅ₐ = l̅;
+    static constexpr std::uint32_t B̅gbit = std::numeric_limits<T>::digits;
+    static constexpr std::uint32_t B̅gₐbit = B̅gbit;
 };
 #elif defined(USE_CONCRETE)
 //concrete.hpp
@@ -62,6 +71,8 @@ struct lvlMparam {
     static constexpr std::uint32_t Bgbit = 10;
     static constexpr std::uint32_t Bgₐ = 1 << Bgₐbit;
     static constexpr std::uint32_t Bg = 1 << Bgbit;
+    static constexpr ErrorDistribution errordist =
+        ErrorDistribution::ModularGaussian;
     static const inline double α =
         0.00000002989040792967434;  // fresh noise, 2^{-24.9...}
     using T = uint32_t;
@@ -73,6 +84,10 @@ struct lvlMparam {
     static constexpr double Δ =
         static_cast<double>(1ULL << std::numeric_limits<T>::digits) /
         plain_modulus;
+    static constexpr std::uint32_t l̅ = 1;
+    static constexpr std::uint32_t l̅ₐ = l̅;
+    static constexpr std::uint32_t B̅gbit = std::numeric_limits<T>::digits;
+    static constexpr std::uint32_t B̅gₐbit = B̅gbit;
 };
 #else
 // 128bit.hpp
