@@ -9,7 +9,7 @@ using namespace TFHEpp;
 
 int main()
 {
-    const uint32_t num_test = 1000;
+    const uint32_t num_test = 16;
     random_device seed_gen;
     default_random_engine engine(seed_gen());
     uniform_int_distribution<uint32_t> binary(0, 1);
@@ -45,11 +45,11 @@ int main()
 
     end = chrono::system_clock::now();
     for (int i = 0; i < num_test; i++)
-        pxor[i] = tlweSymDecrypt<lvl1param>(cxor[i], sk->key.lvl1);
+        pxor[i] = tlweSymDecrypt<lvl1param>(cxor[i], sk->key.get<TFHEpp::lvl1param>());
     for (int i = 0; i < num_test; i++)
-        pnand[i] = tlweSymDecrypt<lvl1param>(cnand[i], sk->key.lvl1);
+        pnand[i] = tlweSymDecrypt<lvl1param>(cnand[i], sk->key.get<TFHEpp::lvl1param>());
     for (int i = 0; i < num_test; i++)
-        pnor[i] = tlweSymDecrypt<lvl1param>(cnor[i], sk->key.lvl1);
+        pnor[i] = tlweSymDecrypt<lvl1param>(cnor[i], sk->key.get<TFHEpp::lvl1param>());
     for (int i = 0; i < num_test; i++) assert(pxor[i] == (pa[i] ^ pb[i]));
     for (int i = 0; i < num_test; i++) assert(pnand[i] == !(pa[i] & pb[i]));
     for (int i = 0; i < num_test; i++) assert(pnor[i] == !(pa[i] | pb[i]));

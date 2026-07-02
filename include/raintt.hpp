@@ -19,7 +19,7 @@ constexpr uint min_wordbits = 27;
 constexpr uint min_wordbits = 31;
 #endif
 
-#ifdef __clang__
+#if defined(__clang__) && !defined(__CUDACC__)
 // Currently _BigInt is only implemented in clang
 #ifdef USE_COMPRESS
 constexpr uint wordbits = 27;
@@ -149,7 +149,7 @@ constexpr Word inv_mod()
 }
 
 // NTT related
-#if defined(__clang__) & defined(USE_COMPRESS)
+#ifdef USE_COMPRESS
 constexpr SWord W = PowREDC(31, K);
 #else
 constexpr SWord W = PowREDC(11, K);

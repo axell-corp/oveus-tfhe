@@ -1,8 +1,8 @@
 #include <axell/gate.hpp>
 #include <axell/integer.hpp>
 #include <axell/mpparam.hpp>
-#include <gate.hpp>
 #include <params.hpp>
+#include <tfhe/gate.hpp>
 
 namespace TFHEpp::detail::integer {
 

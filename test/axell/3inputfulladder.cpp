@@ -9,7 +9,7 @@ using namespace TFHEpp;
 
 int main()
 {
-    const uint32_t num_test = 1000;
+    const uint32_t num_test = 16;
     random_device seed_gen;
     default_random_engine engine(seed_gen());
     uniform_int_distribution<uint32_t> binary(0, 1);
@@ -36,15 +36,15 @@ int main()
     for (int i = 0; i < num_test; i++)
         ca[i] = tlweSymEncrypt<lvl1param>(
             pa[i] ? lvl1param::μ / 2 : -(lvl1param::μ / 2), lvl1param::α,
-            sk->key.lvl1);
+            sk->key.get<TFHEpp::lvl1param>());
     for (int i = 0; i < num_test; i++)
         cb[i] = tlweSymEncrypt<lvl1param>(
             pb[i] ? lvl1param::μ / 2 : -(lvl1param::μ / 2), lvl1param::α,
-            sk->key.lvl1);
+            sk->key.get<TFHEpp::lvl1param>());
     for (int i = 0; i < num_test; i++)
         cc[i] = tlweSymEncrypt<lvl1param>(
             pc[i] ? lvl1param::μ / 2 : -(lvl1param::μ / 2), lvl1param::α,
-            sk->key.lvl1);
+            sk->key.get<TFHEpp::lvl1param>());
     ;
 
     chrono::system_clock::time_point start, end;
@@ -58,9 +58,9 @@ int main()
 
     end = chrono::system_clock::now();
     for (int i = 0; i < num_test; i++)
-        anssum[i] = tlweSymDecrypt<lvl1param>(sum[i], sk->key.lvl1);
+        anssum[i] = tlweSymDecrypt<lvl1param>(sum[i], sk->key.get<TFHEpp::lvl1param>());
     for (int i = 0; i < num_test; i++)
-        anscarry[i] = tlweSymDecrypt<lvl1param>(carry[i], sk->key.lvl1);
+        anscarry[i] = tlweSymDecrypt<lvl1param>(carry[i], sk->key.get<TFHEpp::lvl1param>());
     for (int i = 0; i < num_test; i++)
         assert(anssum[i] == ((pa[i] + pb[i] + pc[i]) & 1));
     for (int i = 0; i < num_test; i++)

@@ -4,11 +4,11 @@
 
 #include <array>
 #include <cstdint>
-#include <key.hpp>
+#include <tfhe/key.hpp>
 #include <limits>
 #include <params.hpp>
 #include <random>
-#include <tlwe.hpp>
+#include <tfhe/tlwe.hpp>
 #include <type_traits>
 #include <vector>
 
@@ -22,11 +22,10 @@ TFHEPP_EXPLICIT_INSTANTIATION_TLWE(INST)
 #undef INST
 
 #define INST(P)                                               \
-    template void tlweSymIntEncrypt<P, P::plain_modulus>(     \
-        TLWE<P> & res, const typename P::T p, const Key<P> &key)
-INST(lvl0param);
-INST(lvl1param);
-INST(lvl2param);
+    template void tlweSymIntEncrypt<P>(TLWE<P> & res,         \
+                                       const typename P::T p, \
+                                       const Key<P> &key)
+TFHEPP_EXPLICIT_INSTANTIATION_TLWE(INST)
 #undef INST
 
 #define INST(P) \
@@ -35,11 +34,9 @@ TFHEPP_EXPLICIT_INSTANTIATION_TLWE(INST)
 #undef INST
 
 #define INST(P)                                                   \
-    template typename P::T tlweSymIntDecrypt<P, P::plain_modulus>( \
-        const TLWE<P> &c, const Key<P> &key)
-INST(lvl0param);
-INST(lvl1param);
-INST(lvl2param);
+    template typename P::T tlweSymIntDecrypt<P>(const TLWE<P> &c, \
+                                                const Key<P> &key)
+TFHEPP_EXPLICIT_INSTANTIATION_TLWE(INST)
 #undef INST
 
 #define INST(P)                                               \

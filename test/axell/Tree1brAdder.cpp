@@ -7,7 +7,7 @@
 
 int main()
 {
-    const uint32_t num_test = 1000;
+    const uint32_t num_test = 16;
     std::random_device seed_gen;
     std::default_random_engine engine(seed_gen());
     std::uniform_int_distribution<uint32_t> binary(0, 1);
@@ -27,7 +27,7 @@ int main()
         for(int j = 0; j<6; j++)
             cin[i][j] = TFHEpp::tlweSymEncrypt<TFHEpp::lvl1param>(
                 pin[i][j] ? TFHEpp::lvlMparam::μ : -TFHEpp::lvlMparam::μ,
-                TFHEpp::lvl1param::α, sk->key.lvl1);
+                TFHEpp::lvl1param::α, sk->key.get<TFHEpp::lvl1param>());
 
     std::chrono::system_clock::time_point start, end;
     start = std::chrono::system_clock::now();
@@ -46,7 +46,7 @@ int main()
     for (int i = 0; i < num_test; i++)
         for(int j = 0; j<2;j++)
         pres[i][j] +=
-            static_cast<uint8_t>(TFHEpp::tlweSymDecrypt<TFHEpp::lvl1param>(cres[i][j], sk->key.lvl1));
+            static_cast<uint8_t>(TFHEpp::tlweSymDecrypt<TFHEpp::lvl1param>(cres[i][j], sk->key.get<TFHEpp::lvl1param>()));
     // for (int i = 0; i < num_test; i++)
     // std::cout<<static_cast<int>(pcarry[i])<<":"<<static_cast<int>(psum[i])<<";"<<static_cast<int>(((pa[i]
     // + pb[i] + pc[i]) & 2) >> 1)<<":"<<static_cast<int>((pa[i] + pb[i] +

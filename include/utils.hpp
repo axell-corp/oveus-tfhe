@@ -11,6 +11,9 @@
 #include <functional>
 #include <limits>
 #include <random>
+#include <type_traits>
+
+#include "bfv/bfv-multilimb.hpp"
 
 #ifdef __AVX2__
 #include <immintrin.h>
@@ -40,6 +43,15 @@ inline typename P::T UniformTorusRandom()
         __uint128_t high = dist64(generator);
         __uint128_t low = dist64(generator);
         return (high << 64) | low;
+    }
+    else if constexpr (is_multilimb_uint_v<typename P::T>) {
+        std::uniform_int_distribution<uint64_t> dist64(
+            0, std::numeric_limits<uint64_t>::max());
+        using T = typename P::T;
+        T res;
+        for (std::size_t i = 0; i < T::limbs; i++)
+            res.limb[i] = dist64(generator);
+        return res;
     }
     else {
         std::uniform_int_distribution<typename P::T> dist(
@@ -129,6 +141,20 @@ inline uint32_t dtot32(double d)
     return int32_t(int64_t((d - int64_t(d)) * (1LL << 32)));
 }
 
+inline __int128_t longDoubleToI128(long double value)
+{
+    const __int128_t i128_max = static_cast<__int128_t>(
+        (static_cast<__uint128_t>(1) << 127) - 1);
+    const __int128_t i128_min = -i128_max - 1;
+    const long double max_value = std::ldexp(1.0L, 127);
+    const long double min_value = -std::ldexp(1.0L, 127);
+
+    if (!std::isfinite(value)) return value < 0 ? i128_min : i128_max;
+    if (value >= max_value) return i128_max;
+    if (value <= min_value) return i128_min;
+    return static_cast<__int128_t>(value);
+}
+
 inline uint16_t dtot16(double d)
 {
     return int16_t(int64_t((d - int64_t(d)) * (1LL << 16)));
@@ -151,20 +177,29 @@ inline typename P::T ModularGaussian(typename P::T center, double stdev)
     }
     else if constexpr (std::is_same_v<typename P::T, uint64_t>) {
         // 64bit fixed-point number version
-        static const double _2p64 = std::pow(2., 64);
         std::normal_distribution<double> distribution(0., 1.0);
-        const double val = stdev * distribution(generator) * _2p64;
-        const uint64_t ival = static_cast<typename P::T>(val);
-        return ival + center;
+        const long double val = std::ldexp(
+            static_cast<long double>(stdev * distribution(generator)), 64);
+        const int64_t ival = static_cast<int64_t>(val);
+        return static_cast<uint64_t>(ival) + center;
     }
     else if constexpr (std::is_same_v<typename P::T, __uint128_t>) {
         // 128bit fixed-point number version
-        // Use two 64-bit Gaussians for high and low parts
-        static const double _2p64 = std::pow(2., 64);
-        std::normal_distribution<double> distribution(0., 1.0);
-        const double val = stdev * distribution(generator) * _2p64;
-        const __int128_t ival = static_cast<__int128_t>(val);
+        std::normal_distribution<long double> distribution(0.0L, 1.0L);
+        const long double val =
+            std::ldexp(static_cast<long double>(stdev) *
+                           distribution(generator),
+                       128);
+        const __int128_t ival = longDoubleToI128(val);
         return static_cast<__uint128_t>(ival) + center;
+    }
+    else if constexpr (is_multilimb_uint_v<typename P::T>) {
+        using T = typename P::T;
+        std::normal_distribution<double> distribution(0., 1.0);
+        const double scale =
+            std::ldexp(stdev, std::numeric_limits<T>::digits);
+        const int64_t ival = static_cast<int64_t>(distribution(generator) * scale);
+        return center + T::from_signed_i64(ival);
     }
     else
         static_assert(false_v<typename P::T>, "Undefined Modular Gaussian!");

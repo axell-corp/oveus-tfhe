@@ -23,7 +23,7 @@ void HomSWAP(TLWE<lvl1param> &resa, TLWE<lvl1param> &resb,
     intemp[lvl1param::k * lvl1param::n] += 2 * lvl1param::μ;
     TLWE<lvl0param> intemplvl0;
     IdentityKeySwitch<lvl10param>(intemplvl0, intemp, ek.getiksk<lvl10param>());
-    GateBootstrappingTLWE2TLWEFFT<lvl01param>(intemp, intemplvl0,
+    GateBootstrappingTLWE2TLWE<lvl01param>(intemp, intemplvl0,
                                               ek.getbkfft<lvl01param>(),
                                               swaptestvecgen<lvl1param>());
     for (int i = 0; i <= lvl1param::k * lvl1param::n; i++) intemp[i] += cs[i];
@@ -90,12 +90,12 @@ void Hom2BRFullAdder(TLWE<lvl1param> &carry, TLWE<lvl1param> &sum,
     IdentityKeySwitch<lvl10param>(intemplvl0, intemp, ek.getiksk<lvl10param>());
     // These are parallel
     // carry
-    GateBootstrappingTLWE2TLWEFFT<lvl01param>(
+    GateBootstrappingTLWE2TLWE<lvl01param>(
         carry, intemplvl0, ek.getbkfft<lvl01param>(),
         μpolygen<lvl1param, lvl1param::μ>());
     // sum
     for (int i = 0; i <= lvl0param::n; i++) intemplvl0[i] *= -2;
-    GateBootstrappingTLWE2TLWEFFT<lvl01param>(
+    GateBootstrappingTLWE2TLWE<lvl01param>(
         sum, intemplvl0, ek.getbkfft<lvl01param>(),
         μpolygen<lvl1param, lvl1param::μ>());
 }
@@ -252,7 +252,7 @@ void Hom3inputThreashold(TLWE<lvl1param> &res, const TLWE<lvl1param> &ca,
     for (int i = 0; i <= lvl1param::k * lvl1param::n; i++) res[i] = ca[i] + cb[i] + cc[i];
     TLWE<lvl0param> temp;
     IdentityKeySwitch<lvl10param>(temp, res, ek.getiksk<lvl10param>());
-    GateBootstrappingTLWE2TLWEFFT<lvl01param>(
+    GateBootstrappingTLWE2TLWE<lvl01param>(
         res, temp, ek.getbkfft<lvl01param>(),
         μpolygen<lvl1param, lvl1param::μ>());
 }

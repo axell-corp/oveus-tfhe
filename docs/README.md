@@ -17,15 +17,18 @@ This documentation lives in `docs/` and is meant to complement the root
 - `API.md` — core types, keys, encryption/decryption, and gate APIs.
 - `Advanced.md` — LUT bootstrapping, circuit bootstrapping, subset keys, packing,
   Double Decomposition, BFV++, and other advanced features.
+- `CKKS.md` — experimental CKKS types, dense bootstrapping, product eval keys,
+  and practical lvl6 validation commands.
 - `Serialization.md` — exporting/importing keys and ciphertexts with cereal.
 
 ## Quick Links
 
 - Main public header: `include/tfhe++.hpp`
 - Parameter/type definitions: `include/params.hpp`, `include/params/`
-- Boolean gates: `include/gate.hpp`
-- Gate bootstrapping / LUTs: `include/gatebootstrapping.hpp`
-- Circuit bootstrapping: `include/circuitbootstrapping.hpp`
+- Boolean gates: `include/tfhe/gate.hpp`
+- Gate bootstrapping / LUTs: `include/tfhe/gatebootstrapping.hpp`
+- Circuit bootstrapping: `include/tfhe/circuitbootstrapping.hpp`
+- CKKS: `include/ckks/ckks.hpp`, `test/ckks/ckks_bootstrap_validation.cpp`,
+  `test/ckks/ckks_bootstrap_workflow.cpp`
 - Tutorial programs: `tutorial/`
 - Tests/examples: `test/`
-

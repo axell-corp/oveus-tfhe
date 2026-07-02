@@ -1,12 +1,12 @@
 #pragma once
 
 #include <array>
-#include <cloudkey.hpp>
 #include <cstddef>
 #include <cstdint>
-#include <gate.hpp>
 #include <limits>
 #include <memory>
+#include <tfhe/cloudkey.hpp>
+#include <tfhe/gate.hpp>
 #include <type_traits>
 
 #if __cplusplus == 202002L

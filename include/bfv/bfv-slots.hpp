@@ -1,0 +1,1254 @@
+#pragma once
+
+#include <algorithm>
+#include <array>
+#include <cassert>
+#include <cstdint>
+#include <limits>
+#include <memory>
+#include <type_traits>
+#include <vector>
+
+#include "bfv++.hpp"
+#include "tfhe/evalkeygens.hpp"
+#include "tfhe/keyswitch.hpp"
+#include "params.hpp"
+#include "tfhe/trlwe.hpp"
+
+// bfv-slots.hpp: SIMD slot operations for BFV in TFHEpp
+//
+// SIMD slots exploit the CRT factorization of Z_t[x]/(x^n+1) when t is prime
+// and t ≡ 1 (mod 2n).  Under this condition x^n+1 splits into n linear factors,
+// giving n independent "slots" automatically operated on in parallel by poly
+// arithmetic.  Slot rotation requires Galois automorphisms (x → x^d) handled by
+// the existing EvalAuto infrastructure.
+//
+// BFV scaling:
+//   Δ = floor(Q/t) where Q = 2^128, t = 114689.
+//   Encrypt: floor(m·Q/t) per coefficient (≤1 rounding error, independent of m).
+//   Decrypt: round(phase·t/Q) (exact BFV decoding).
+//   Multiply: accumulate digit products in 384-bit, divide by Δ at the end.
+
+namespace TFHEpp {
+
+// ---------------------------------------------------------------------------
+// Modular arithmetic helpers (all operations mod 64-bit prime)
+// ---------------------------------------------------------------------------
+
+inline uint64_t mulmod64(uint64_t a, uint64_t b, uint64_t mod)
+{
+    return static_cast<uint64_t>(
+        static_cast<unsigned __int128>(a) * b % mod);
+}
+
+inline uint64_t powmod64(uint64_t base, uint64_t exp, uint64_t mod)
+{
+    uint64_t result = 1;
+    base %= mod;
+    while (exp > 0) {
+        if (exp & 1) result = mulmod64(result, base, mod);
+        base = mulmod64(base, base, mod);
+        exp >>= 1;
+    }
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// Per-parameter SIMD constants
+//   PSI      — primitive 2n-th root of unity mod t  (NTTmod pre-twist factor)
+//   PSI_INV  — modular inverse of PSI
+//   N_INV    — modular inverse of n mod t  (used in INTT normalization)
+// ---------------------------------------------------------------------------
+
+template <class P>
+struct SIMDConstants {
+    static constexpr uint64_t t       = P::simd_modulus;
+    static constexpr uint64_t PSI     = P::simd_psi;
+    static constexpr uint64_t PSI_INV = P::simd_psi_inv;
+    static constexpr uint64_t N_INV   = P::simd_n_inv;
+};
+
+template <>
+struct SIMDConstants<lvl3simdparam> {
+    // t = 114689,  n = 4096,  2n = 8192
+    // g = 3 (primitive root of t),  ψ = g^((t-1)/(2n)) = 3^14 mod 114689
+    static constexpr uint64_t t     = 114689;
+    static constexpr uint64_t PSI     = 80720;   // ψ: primitive 2n-th root mod t
+    static constexpr uint64_t PSI_INV = 7887;    // ψ^{-1} mod t
+    static constexpr uint64_t N_INV   = 114661;  // n^{-1} mod t  (n=4096)
+};
+
+// BFV encoding: floor(m * Q / t), where Q = 2^width(T).
+// The fractional correction must be computed in 128-bit arithmetic because
+// bootstrapping uses prime-power plaintext moduli such as p^2.
+template <class P>
+inline typename P::T bfvEncodeCoeff(uint64_t m)
+{
+    constexpr typename P::T delta = P::delta_int;
+    constexpr uint64_t r = P::Q_mod_t;
+    constexpr uint64_t t_val = static_cast<uint64_t>(P::plain_modulus);
+    m %= t_val;
+    return static_cast<typename P::T>(m) * delta
+         + static_cast<typename P::T>(
+               (static_cast<unsigned __int128>(m) * r) / t_val);
+}
+
+template <class P>
+inline typename P::T bfvCenteredPlainCoeff(uint64_t c)
+{
+    constexpr uint64_t t_val = static_cast<uint64_t>(P::plain_modulus);
+    c %= t_val;
+    if (c > t_val / 2) {
+        const uint64_t magnitude = t_val - c;
+        return typename P::T{0} - typename P::T{magnitude};
+    }
+    return typename P::T{c};
+}
+
+template <class P>
+void PolyMulTorusByCenteredPlain(Polynomial<P> &res,
+                                 const Polynomial<P> &torus,
+                                 const std::array<uint64_t, P::n> &plain)
+{
+    if constexpr (is_multilimb_uint_v<typename P::T>) {
+        constexpr uint64_t t_val = static_cast<uint64_t>(P::plain_modulus);
+        auto pos = std::make_unique<std::array<uint64_t, P::n>>();
+        auto neg = std::make_unique<std::array<uint64_t, P::n>>();
+        bool has_pos = false;
+        bool has_neg = false;
+        for (uint32_t i = 0; i < P::n; i++) {
+            const uint64_t c = plain[i] % t_val;
+            if (c > t_val / 2) {
+                (*pos)[i] = 0;
+                (*neg)[i] = t_val - c;
+                has_neg = (*neg)[i] != 0 || has_neg;
+            }
+            else {
+                (*pos)[i] = c;
+                (*neg)[i] = 0;
+                has_pos = c != 0 || has_pos;
+            }
+        }
+
+        if (has_pos) {
+            PolyMulTorusByUnsigned<P>(res, torus, *pos);
+        }
+        else {
+            for (uint32_t i = 0; i < P::n; i++) res[i] = 0;
+        }
+
+        if (has_neg) {
+            auto tmp = std::make_unique<Polynomial<P>>();
+            PolyMulTorusByUnsigned<P>(*tmp, torus, *neg);
+            for (uint32_t i = 0; i < P::n; i++) res[i] -= (*tmp)[i];
+        }
+    }
+    else {
+        Polynomial<P> centered;
+        for (uint32_t i = 0; i < P::n; i++)
+            centered[i] = bfvCenteredPlainCoeff<P>(plain[i]);
+        PolyMul<P>(res, torus, centered);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Galois permutation tables for slot rotation.
+//
+// The Galois group for x^n+1 with n=2^k is (Z/2n)* ≅ Z_2 × Z_{n/2}.
+// Generator g=5 generates the Z_{n/2} factor.  The n NTT evaluation points
+// split into two "rows" of n/2, indexed by powers of 5:
+//   Row 0: NTT positions (5^i - 1)/2 mod n   for i=0..n/2-1
+//   Row 1: NTT positions (2n - 5^i - 1)/2 mod n
+//
+// For slot rotation to work, the user's slot[i] must correspond to the
+// i-th Galois orbit position (5^i mod 2n), NOT the i-th NTT position.
+// The automorphism x→x^5 then cyclically rotates slot indices by 1.
+//
+// galois_ntt_index[i] = (5^i - 1)/2 mod n  (row 0)
+// galois_ntt_index[i + n/2] = (2n - 5^i - 1)/2 mod n  (row 1)
+// ---------------------------------------------------------------------------
+
+template <class P>
+struct GaloisPermutation {
+    static const std::array<uint32_t, P::n> &ntt_index() {
+        static const auto table = []() {
+            std::array<uint32_t, P::n> tbl;
+            constexpr uint64_t twon = 2 * P::n;
+            uint64_t g = 1;  // 5^0
+            for (uint32_t i = 0; i < P::n / 2; i++) {
+                tbl[i]         = static_cast<uint32_t>((g - 1) / 2);
+                tbl[i + P::n/2] = static_cast<uint32_t>((twon - g - 1) / 2);
+                g = g * 5 % twon;
+            }
+            return tbl;
+        }();
+        return table;
+    }
+    // Inverse: given NTT position, return slot index
+    static const std::array<uint32_t, P::n> &slot_index() {
+        static const auto table = []() {
+            std::array<uint32_t, P::n> tbl;
+            const auto &fwd = ntt_index();
+            for (uint32_t i = 0; i < P::n; i++)
+                tbl[fwd[i]] = i;
+            return tbl;
+        }();
+        return table;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// In-place bit-reversal permutation (standard for Cooley-Tukey NTT)
+// ---------------------------------------------------------------------------
+
+template <uint32_t N>
+static void bit_reverse(std::array<uint64_t, N> &a)
+{
+    static_assert((N & (N - 1)) == 0, "N must be a power of 2");
+    constexpr int LOG = __builtin_ctz(N);
+    for (uint32_t i = 0; i < N; i++) {
+        uint32_t j = 0;
+        uint32_t x = i;
+        for (int b = 0; b < LOG; b++) {
+            j = (j << 1) | (x & 1);
+            x >>= 1;
+        }
+        if (j > i) std::swap(a[i], a[j]);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// NTTmod<P> — forward twisted NTT mod t
+//   Input:  array of n polynomial coefficients in [0, t)
+//   Output: array of n slot evaluations at ψ^{2i+1} for i=0..n-1
+//
+// Algorithm:
+//   1. Pre-twist:  a[i] *= ψ^i   (makes the ring negacyclic)
+//   2. Bit-reversal permutation
+//   3. Cooley-Tukey DIT butterfly with ω = ψ² as primitive n-th root
+// ---------------------------------------------------------------------------
+
+template <class P>
+void NTTmod(std::array<uint64_t, P::n> &a)
+{
+    using C = SIMDConstants<P>;
+    constexpr uint64_t t   = C::t;
+    constexpr uint64_t psi = C::PSI;
+    constexpr uint32_t n   = P::n;
+
+    // Step 1: pre-twist a[i] *= ψ^i
+    uint64_t psi_pow = 1;
+    for (uint32_t i = 0; i < n; i++) {
+        a[i] = mulmod64(a[i], psi_pow, t);
+        psi_pow = mulmod64(psi_pow, psi, t);
+    }
+
+    // Step 2: bit-reversal
+    bit_reverse<P::n>(a);
+
+    // Step 3: Cooley-Tukey DIT butterflies with ω = ψ²
+    // ω is the primitive n-th root of unity (ψ^2)
+    const uint64_t omega = mulmod64(psi, psi, t);
+
+    for (uint32_t len = 2; len <= n; len <<= 1) {
+        // w_len = ω^(n/len): principal len-th root of unity
+        const uint64_t w_len = powmod64(omega, n / len, t);
+        for (uint32_t i = 0; i < n; i += len) {
+            uint64_t w = 1;
+            for (uint32_t j = 0; j < len / 2; j++) {
+                const uint64_t u = a[i + j];
+                const uint64_t v = mulmod64(a[i + j + len / 2], w, t);
+                a[i + j]            = (u + v >= t) ? u + v - t : u + v;
+                a[i + j + len / 2]  = (u >= v) ? u - v : u - v + t;
+                w = mulmod64(w, w_len, t);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// INTTmod<P> — inverse twisted NTT mod t
+//   Input:  array of n slot values in [0, t)
+//   Output: array of n polynomial coefficients in [0, t)
+//
+// Algorithm:
+//   1. Bit-reversal permutation
+//   2. Cooley-Tukey DIT butterfly with ω_inv = ω^{-1} = (ψ²)^{-1} = ψ^{-2}
+//   3. Normalize: multiply each element by n^{-1} mod t
+//   4. Post-untwist: a[i] *= ψ^{-i}
+// ---------------------------------------------------------------------------
+
+template <class P>
+void INTTmod(std::array<uint64_t, P::n> &a)
+{
+    using C = SIMDConstants<P>;
+    constexpr uint64_t t       = C::t;
+    constexpr uint64_t psi_inv = C::PSI_INV;
+    constexpr uint64_t n_inv   = C::N_INV;
+    constexpr uint32_t n       = P::n;
+
+    // ω_inv = ψ^{-2}
+    const uint64_t omega_inv = mulmod64(psi_inv, psi_inv, t);
+
+    // Step 1: bit-reversal
+    bit_reverse<P::n>(a);
+
+    // Step 2: DIT butterfly with ω_inv (same structure as forward NTT)
+    for (uint32_t len = 2; len <= n; len <<= 1) {
+        const uint64_t w_len = powmod64(omega_inv, n / len, t);
+        for (uint32_t i = 0; i < n; i += len) {
+            uint64_t w = 1;
+            for (uint32_t j = 0; j < len / 2; j++) {
+                const uint64_t u = a[i + j];
+                const uint64_t v = mulmod64(a[i + j + len / 2], w, t);
+                a[i + j]            = (u + v >= t) ? u + v - t : u + v;
+                a[i + j + len / 2]  = (u >= v) ? u - v : u - v + t;
+                w = mulmod64(w, w_len, t);
+            }
+        }
+    }
+
+    // Step 3: normalize by n^{-1}
+    for (uint32_t i = 0; i < n; i++)
+        a[i] = mulmod64(a[i], n_inv, t);
+
+    // Step 4: post-untwist a[i] *= ψ^{-i}
+    uint64_t psi_inv_pow = 1;
+    for (uint32_t i = 0; i < n; i++) {
+        a[i] = mulmod64(a[i], psi_inv_pow, t);
+        psi_inv_pow = mulmod64(psi_inv_pow, psi_inv, t);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SlotEncode<P> — slot vector → polynomial coefficients
+//   slots[i] is a value in Z_t; output polynomial has coefficients in [0,t)
+// ---------------------------------------------------------------------------
+
+template <class P>
+void SlotEncode(Polynomial<P> &poly, const std::array<uint64_t, P::n> &slots)
+{
+    // Apply Galois permutation: user slot[i] → NTT position galois_ntt_index[i]
+    const auto &perm = GaloisPermutation<P>::ntt_index();
+    std::array<uint64_t, P::n> ntt_order;
+    for (uint32_t i = 0; i < P::n; i++)
+        ntt_order[perm[i]] = slots[i];
+
+    INTTmod<P>(ntt_order);  // inverse NTT: slot evaluations → polynomial coefficients
+    for (uint32_t i = 0; i < P::n; i++)
+        poly[i] = static_cast<typename P::T>(ntt_order[i]);
+}
+
+// ---------------------------------------------------------------------------
+// SlotDecode<P> — polynomial coefficients → slot vector
+// ---------------------------------------------------------------------------
+
+template <class P>
+void SlotDecode(std::array<uint64_t, P::n> &slots, const Polynomial<P> &poly)
+{
+    constexpr uint64_t t = static_cast<uint64_t>(P::plain_modulus);
+    std::array<uint64_t, P::n> ntt_order;
+    for (uint32_t i = 0; i < P::n; i++)
+        ntt_order[i] = static_cast<uint64_t>(poly[i]) % t;
+    NTTmod<P>(ntt_order);  // forward NTT: polynomial coefficients → slot evaluations
+
+    // Apply inverse Galois permutation: NTT position → user slot[i]
+    const auto &inv_perm = GaloisPermutation<P>::slot_index();
+    for (uint32_t i = 0; i < P::n; i++)
+        slots[inv_perm[i]] = ntt_order[i];
+}
+
+// ---------------------------------------------------------------------------
+// trlweSlotEncrypt<P> — encode SIMD slots then encrypt as TRLWE
+//
+// Uses integer Δ (not double) to avoid precision loss when T=__uint128_t and
+// t is an odd prime:  Δ_int = floor((2^width - 1) / t)
+// The error introduced by floor vs exact division is < 1, far below the
+// noise budget.
+// ---------------------------------------------------------------------------
+
+template <class P>
+void trlweSlotEncrypt(TRLWE<P> &ct, const std::array<uint64_t, P::n> &slots,
+                      const Key<P> &key)
+{
+    Polynomial<P> poly;
+    SlotEncode<P>(poly, slots);
+
+    // BFV encoding: floor(m · Q / t) per coefficient.
+    // Decompose as: m·delta_int + floor(m·Q_mod_t / t)
+    // where delta_int = floor(Q/t) and Q_mod_t = Q mod t.
+    // This gives at most 1 unit of rounding error regardless of m.
+    Polynomial<P> scaled;
+    for (uint32_t i = 0; i < P::n; i++) {
+        uint64_t m = static_cast<uint64_t>(poly[i]);
+        scaled[i] = bfvEncodeCoeff<P>(m);
+    }
+
+    trlweSymEncrypt<P>(ct, scaled, key);
+}
+
+// ---------------------------------------------------------------------------
+// trlweSlotDecrypt<P> — decrypt TRLWE then decode SIMD slots
+//
+// Uses integer arithmetic throughout to avoid double-precision loss for
+// 128-bit torus values with a prime modulus.
+// ---------------------------------------------------------------------------
+
+// Compute round(phase · t / Q) mod t where Q = 2^128.
+// This is the standard BFV decoding that works for any Δ = floor(Q/t).
+// Returns a value in [0, t-1].
+template <class P>
+inline uint64_t bfvDecodeCoeff(typename P::T phase_u)
+{
+    constexpr uint64_t t_val = static_cast<uint64_t>(P::plain_modulus);
+    if constexpr (is_multilimb_uint_v<typename P::T>) {
+        return round_mul_u64_div_pow2(phase_u, t_val) % t_val;
+    }
+    else {
+        // Compute round(phase · t / 2^128) = floor((phase · t + 2^127) / 2^128)
+        //
+        // phase · t is a 145-bit value (128 + 17 bits).
+        // We compute the upper 64 bits of this 145-bit product.
+        const uint64_t lo = static_cast<uint64_t>(phase_u);
+        const uint64_t hi = static_cast<uint64_t>(phase_u >> 64);
+
+        // phase · t = hi·t·2^64 + lo·t
+        __uint128_t prod_lo = static_cast<__uint128_t>(lo) * t_val;
+        __uint128_t prod_hi = static_cast<__uint128_t>(hi) * t_val;
+        // Combine: add carry from prod_lo into prod_hi
+        prod_hi += (prod_lo >> 64);
+        // Add rounding bias: 2^127 >> 64 = 2^63
+        prod_hi += static_cast<__uint128_t>(1) << 63;
+        // Result = top 64 bits = (phase·t + 2^127) >> 128
+        uint64_t result = static_cast<uint64_t>(prod_hi >> 64);
+        return result % t_val;
+    }
+}
+
+template <class P>
+void trlweSlotDecrypt(std::array<uint64_t, P::n> &slots, const TRLWE<P> &ct,
+                      const Key<P> &key)
+{
+    Polynomial<P> phase = trlwePhase<P>(ct, key);
+
+    Polynomial<P> poly;
+    for (uint32_t i = 0; i < P::n; i++)
+        poly[i] = static_cast<typename P::T>(bfvDecodeCoeff<P>(phase[i]));
+
+    SlotDecode<P>(slots, poly);
+}
+
+// ---------------------------------------------------------------------------
+// ModulusSwitch<P> — rescale a TRLWE from mod Q=2^128 down to mod Qp
+//
+// For each coefficient c: new_c = round(c · Qp / 2^128) mod Qp, in [0, Qp).
+// The scaling factor Δ = Q/t becomes Δ' = Qp/t, so the plaintext m (mod t)
+// is preserved modulo a small additive rounding error bounded by ~||s||·n/2.
+//
+// Qp must fit in uint64_t. Typical bootstrapping usage: Qp = p^e with p a
+// small prime and p^e comfortably below 2^63.
+//
+// After this call the ciphertext is interpreted mod Qp (not mod 2^128),
+// so subsequent operations must either reduce mod Qp explicitly or stay
+// within the range where wrap-around in 128-bit is harmless.
+// ---------------------------------------------------------------------------
+
+template <class P>
+inline typename P::T modSwitchCoeff(typename P::T c, uint64_t Qp)
+{
+    if constexpr (is_multilimb_uint_v<typename P::T>) {
+        return static_cast<typename P::T>(
+            round_mul_u64_div_pow2(c, Qp) % Qp);
+    }
+    else {
+        static_assert(std::is_same_v<typename P::T, __uint128_t>,
+                      "ModulusSwitch currently requires T = __uint128_t");
+        // Compute floor((c · Qp + 2^127) / 2^128) mod Qp.
+        // Follows the same structure as bfvDecodeCoeff: the low and high halves
+        // of c are each multiplied by Qp, the low product is shifted right by
+        // 64 and added into the high product, and a 2^63 rounding bias is added
+        // (which acts as 2^127 once we finally shift right by 64 more).
+        const uint64_t lo = static_cast<uint64_t>(c);
+        const uint64_t hi = static_cast<uint64_t>(c >> 64);
+        __uint128_t prod_lo = static_cast<__uint128_t>(lo) * Qp;
+        __uint128_t prod_hi = static_cast<__uint128_t>(hi) * Qp;
+        prod_hi += (prod_lo >> 64);
+        prod_hi += static_cast<__uint128_t>(1) << 63;
+        uint64_t result = static_cast<uint64_t>(prod_hi >> 64);
+        return static_cast<typename P::T>(result % Qp);
+    }
+}
+
+template <class P>
+void ModulusSwitch(TRLWE<P> &res, const TRLWE<P> &ct, uint64_t Qp)
+{
+    for (int k = 0; k <= static_cast<int>(P::k); k++)
+        for (uint32_t i = 0; i < P::n; i++)
+            res[k][i] = modSwitchCoeff<P>(ct[k][i], Qp);
+}
+
+// ---------------------------------------------------------------------------
+// trlweSlotDecryptModSwitched<P> — decrypt a TRLWE that has been mod-switched
+// to Qp (so its coefficients are in [0, Qp)).
+//
+// Computes phase = c[P::k] - Σ c[k]·s using existing 128-bit PolyMul, then
+// reinterprets each coefficient as a signed 128-bit integer (valid because
+// the true integer value is bounded by n·Qp ≪ 2^127) and reduces mod Qp.
+// Finally decodes each coefficient as round(phase·t / Qp) mod t and applies
+// the inverse slot-domain transform.
+// ---------------------------------------------------------------------------
+
+template <class P>
+void trlweSlotDecryptModSwitched(std::array<uint64_t, P::n> &slots,
+                                 const TRLWE<P> &ct, const Key<P> &key,
+                                 uint64_t Qp)
+{
+    constexpr uint64_t t_val = static_cast<uint64_t>(P::plain_modulus);
+    Polynomial<P> phase = trlwePhase<P>(ct, key);
+
+    Polynomial<P> poly;
+    for (uint32_t i = 0; i < P::n; i++) {
+        // Reinterpret phase[i] (mod 2^128) as a signed integer. True value
+        // fits easily in 64 bits for reasonable Qp, so the high bit of the
+        // 128-bit word tells us the sign.
+        __int128_t signed_phase = static_cast<__int128_t>(phase[i]);
+        __int128_t r = signed_phase % static_cast<__int128_t>(Qp);
+        if (r < 0) r += Qp;
+        uint64_t phase_Qp = static_cast<uint64_t>(r);
+
+        // Decode: round(phase_Qp · t / Qp) mod t, computed in 128-bit
+        // intermediate to avoid overflow when phase_Qp · t exceeds 64-bit.
+        __uint128_t num = static_cast<__uint128_t>(phase_Qp) * t_val
+                        + (static_cast<__uint128_t>(Qp) >> 1);
+        uint64_t decoded = static_cast<uint64_t>(num / Qp) % t_val;
+        poly[i] = static_cast<typename P::T>(decoded);
+    }
+
+    SlotDecode<P>(slots, poly);
+}
+
+// ---------------------------------------------------------------------------
+// GaloisKey<P> — evaluation keys for all log2(n) power-of-2 slot rotations
+//                plus one conjugation key.
+//
+//   index i  (0 ≤ i < nbit)  : key for rotation by 2^i slots
+//                                Galois element = 5^{2^i} mod 2n
+//   index nbit               : key for conjugation  (Galois element = 2n-1)
+//
+// Arbitrary rotation by k steps is applied via binary decomposition:
+//   RotateSlots uses at most nbit sequential EvalAuto calls.
+// ---------------------------------------------------------------------------
+
+template <class P>
+using GaloisKey = std::array<EvalAutoKey<P>, P::nbit + 1>;
+
+// ---------------------------------------------------------------------------
+// GaloisKeyGen<P> — generate the full GaloisKey from the secret key
+// ---------------------------------------------------------------------------
+
+template <class P>
+void GaloisKeyGen(GaloisKey<P> &gk, const Key<P> &key)
+{
+    // Galois group generator g=5 for power-of-2 cyclotomics.
+    // Rotation by 2^i uses element 5^{2^i} mod 2n.
+    uint64_t d = 5;
+    for (int i = 0; i < static_cast<int>(P::nbit); i++) {
+        evalautokeygen<P>(gk[i], static_cast<uint>(d), key);
+        d = d * d % (2 * P::n);  // 5^{2^{i+1}} mod 2n
+    }
+    // Conjugation: automorphism x → x^{-1} ≡ x^{2n-1}
+    evalautokeygen<P>(gk[P::nbit], 2 * P::n - 1, key);
+}
+
+// ---------------------------------------------------------------------------
+// RotateSlots<P> — rotate SIMD slots cyclically by 'steps' positions
+//
+// Uses binary decomposition of steps: applies at most nbit sequential
+// EvalAuto calls, each using the corresponding power-of-2 rotation key.
+// EvalAuto internally calls ExternalProduct which auto-selects the DD path
+// when P::l̅ > 1.
+// ---------------------------------------------------------------------------
+
+template <class P>
+void RotateSlots(TRLWE<P> &res, const TRLWE<P> &ct, int steps,
+                 const GaloisKey<P> &gk)
+{
+    // The Galois group Z_{n/2} acts on each row of n/2 slots.
+    // Rotation by k applies automorphism 5^k mod 2n.
+    // Normalize steps to [0, n/2).
+    constexpr int half = static_cast<int>(P::n) / 2;
+    steps = ((steps % half) + half) % half;
+
+    if (steps == 0) {
+        res = ct;
+        return;
+    }
+
+    // Binary decomposition of steps in [0, n/2):
+    // bit i of steps → apply automorphism 5^{2^i} mod 2n (key gk[i]).
+    // Only nbit-1 bits needed (since steps < n/2 = 2^{nbit-1}).
+    uint64_t d = 5;
+    if constexpr (is_multilimb_uint_v<typename P::T>) {
+        auto cur = std::make_unique<TRLWE<P>>(ct);
+        auto tmp = std::make_unique<TRLWE<P>>();
+        for (int i = 0; i < static_cast<int>(P::nbit) - 1; i++) {
+            if ((steps >> i) & 1) {
+                EvalAuto<P>(*tmp, *cur, static_cast<uint>(d), gk[i]);
+                *cur = *tmp;
+            }
+            d = d * d % (2 * P::n);
+        }
+        res = *cur;
+    }
+    else {
+        TRLWE<P> cur = ct, tmp;
+        for (int i = 0; i < static_cast<int>(P::nbit) - 1; i++) {
+            if ((steps >> i) & 1) {
+                EvalAuto<P>(tmp, cur, static_cast<uint>(d), gk[i]);
+                cur = tmp;
+            }
+            d = d * d % (2 * P::n);
+        }
+        res = cur;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ConjugateSlots<P> — apply the conjugation automorphism (x → x^{-1})
+// ---------------------------------------------------------------------------
+
+template <class P>
+void ConjugateSlots(TRLWE<P> &res, const TRLWE<P> &ct, const GaloisKey<P> &gk)
+{
+    EvalAuto<P>(res, ct, 2 * P::n - 1, gk[P::nbit]);
+}
+
+// ---------------------------------------------------------------------------
+// SlotPtxtMul<P> — slot-wise plaintext-vector × ciphertext
+//
+// Given a TRLWE ct encrypting slot vector s = (s_0, ..., s_{n-1}) mod t and a
+// plaintext slot vector v = (v_0, ..., v_{n-1}) mod t, produce a TRLWE
+// encrypting (s_0·v_0, ..., s_{n-1}·v_{n-1}) mod t.
+//
+// For power-of-2 cyclotomic with t ≡ 1 (mod 2n), pointwise slot multiplication
+// corresponds to polynomial multiplication in Z[x]/(x^n+1): if C = INTT(s) and
+// V = INTT(v), then INTT(s pointwise v) = C · V.  We multiply each component
+// of ct by the polynomial V using the existing PolyMul.
+//
+// Noise growth is proportional to ||V||, so the caller is expected to keep v
+// small (e.g. coefficients in [0, t) rather than arbitrary 128-bit values).
+// ---------------------------------------------------------------------------
+
+template <class P>
+void SlotPtxtMul(TRLWE<P> &res, const TRLWE<P> &ct,
+                 const std::array<uint64_t, P::n> &slot_vector)
+{
+    // Encode slot_vector via INTT into a plaintext polynomial V.
+    Polynomial<P> V;
+    SlotEncode<P>(V, slot_vector);
+
+    // Multiply each TRLWE component by V.  PolyMul works mod 2^{width(T)},
+    // which is what we want for BFV's phase arithmetic.
+    if constexpr (is_multilimb_uint_v<typename P::T>) {
+        auto V_u64 = std::make_unique<std::array<uint64_t, P::n>>();
+        for (uint32_t i = 0; i < P::n; i++)
+            (*V_u64)[i] =
+                static_cast<uint64_t>(V[i]) % static_cast<uint64_t>(P::plain_modulus);
+        for (int k = 0; k <= static_cast<int>(P::k); k++)
+            PolyMulTorusByCenteredPlain<P>(res[k], ct[k], *V_u64);
+    }
+    else {
+        for (uint32_t i = 0; i < P::n; i++)
+            V[i] = bfvCenteredPlainCoeff<P>(static_cast<uint64_t>(V[i]));
+        for (int k = 0; k <= static_cast<int>(P::k); k++)
+            PolyMul<P>(res[k], ct[k], V);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LinearTransform<P> — apply a diagonal-decomposed linear map homomorphically
+//
+// Given diagonals d_0, ..., d_{M-1} and corresponding rotation offsets
+// r_0, ..., r_{M-1}, compute
+//
+//   res = Σ_{i=0}^{M-1} d_i ∘ rotate(ct, r_i)
+//
+// where ∘ is pointwise slot multiplication and rotate uses RotateSlots
+// (intra-row rotation by r_i within each Galois row of n/2 slots).
+//
+// This is the standard "diagonals" formulation of matrix-vector
+// multiplication in the slot domain.  A user who wants a full n×n matrix M
+// decomposed as M = Σ_i diag(d_i) · ρ^{r_i} (with ρ the rotation
+// permutation) would call this with (d_i, r_i) for every non-zero diagonal.
+// Baby-step/giant-step callers precompute fewer rotations; see
+// LinearTransformBSGS<P>.
+// ---------------------------------------------------------------------------
+
+template <class P>
+void LinearTransform(TRLWE<P> &res, const TRLWE<P> &ct,
+                     const std::vector<std::array<uint64_t, P::n>> &diagonals,
+                     const std::vector<int> &rotation_offsets,
+                     const GaloisKey<P> &gk)
+{
+    assert(diagonals.size() == rotation_offsets.size());
+    assert(!diagonals.empty());
+
+    auto rotated = std::make_unique<TRLWE<P>>();
+    auto scaled = std::make_unique<TRLWE<P>>();
+    // First term — write into res directly.
+    RotateSlots<P>(*rotated, ct, rotation_offsets[0], gk);
+    SlotPtxtMul<P>(res, *rotated, diagonals[0]);
+
+    // Remaining terms — rotate, scale, accumulate.
+    for (size_t i = 1; i < diagonals.size(); i++) {
+        RotateSlots<P>(*rotated, ct, rotation_offsets[i], gk);
+        SlotPtxtMul<P>(*scaled, *rotated, diagonals[i]);
+        for (int k = 0; k <= static_cast<int>(P::k); k++)
+            for (uint32_t j = 0; j < P::n; j++)
+                res[k][j] += (*scaled)[k][j];
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Plaintext-level intra-row rotation of a slot vector
+//
+// Left cyclic shift by `steps` positions within each Galois row of n/2 slots,
+// matching the action of RotateSlots on the ciphertext side.  Used for the
+// plaintext pre-rotation of diagonals in baby-step/giant-step.
+// ---------------------------------------------------------------------------
+
+template <class P>
+inline void RotateSlotVector(std::array<uint64_t, P::n> &out,
+                             const std::array<uint64_t, P::n> &in,
+                             int steps)
+{
+    constexpr int half = static_cast<int>(P::n) / 2;
+    steps = ((steps % half) + half) % half;
+    for (int i = 0; i < half; i++) {
+        out[i] = in[(i + steps) % half];
+        out[half + i] = in[half + (i + steps) % half];
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LinearTransformBSGS<P> — baby-step/giant-step diagonal-decomposition
+//
+// Splits each rotation offset r as r = k·j2 + j1 with j1 ∈ [0, k).  Precomputes
+// the k "baby" rotations once and applies the (n/k) "giant" rotations to the
+// accumulated inner sums.  Plaintext diagonals are rotated on the fly by
+// -k·j2 so that the inner multiplication lines up with the corresponding
+// baby rotation of the ciphertext.
+//
+//   Cost: k + ⌈M/k⌉ intra-row rotations (vs M for the naive LinearTransform),
+//         where M is the number of non-zero diagonals.
+//   Choose k ≈ √M for the minimum.
+//
+// Offsets must be distinct and non-negative; the implementation groups them
+// by j2 = offset / k.  Offsets ≥ n/2 are reduced modulo n/2 automatically
+// by the underlying RotateSlots call.
+// ---------------------------------------------------------------------------
+
+template <class P>
+void LinearTransformBSGS(TRLWE<P> &res, const TRLWE<P> &ct,
+                         const std::vector<std::array<uint64_t, P::n>> &diagonals,
+                         const std::vector<int> &rotation_offsets,
+                         int k_step,
+                         const GaloisKey<P> &gk)
+{
+    assert(diagonals.size() == rotation_offsets.size());
+    assert(!diagonals.empty());
+    assert(k_step > 0);
+
+    constexpr int half = static_cast<int>(P::n) / 2;
+
+    // Precompute baby rotations σ^{j1}(ct) for j1 ∈ [0, k_step).
+    std::vector<TRLWE<P>> baby(k_step);
+    baby[0] = ct;
+    for (int j1 = 1; j1 < k_step; j1++)
+        RotateSlots<P>(baby[j1], ct, j1, gk);
+
+    // Group diagonals by j2 = offset / k_step.  For each j2, the inner sum
+    // Σ_{j1} σ^{-k·j2}(d_{k·j2+j1}) ∘ baby[j1] is computed first (no new
+    // rotations), then rotated once by k·j2 and added into res.
+    std::vector<std::vector<std::pair<int, size_t>>> groups;  // j2 → [(j1, idx)]
+    int max_j2 = 0;
+    for (size_t i = 0; i < rotation_offsets.size(); i++) {
+        int r = ((rotation_offsets[i] % half) + half) % half;
+        int j2 = r / k_step;
+        int j1 = r % k_step;
+        if (j2 >= max_j2) { max_j2 = j2; groups.resize(max_j2 + 1); }
+        groups[j2].emplace_back(j1, i);
+    }
+
+    if constexpr (is_multilimb_uint_v<typename P::T> &&
+                  use_multilimb_digit_fft_v<P>) {
+        using T = typename P::T;
+        constexpr int width = std::numeric_limits<T>::digits;
+        constexpr int plain_digits =
+            (static_cast<int>(P::plain_modulusbit) +
+             static_cast<int>(P::B̅gbit) - 1) /
+            static_cast<int>(P::B̅gbit);
+        constexpr uint64_t plain_mask =
+            P::B̅gbit == 64 ? std::numeric_limits<uint64_t>::max()
+                            : ((uint64_t{1} << P::B̅gbit) - 1);
+        constexpr T half_digit = T{1} << (P::B̅gbit - 1);
+        constexpr T torus_mask = (T{1} << P::B̅gbit) - T{1};
+        constexpr T offset = [] {
+            constexpr int local_width = std::numeric_limits<T>::digits;
+            constexpr T local_half_digit = T{1} << (P::B̅gbit - 1);
+            T value = 0;
+            for (int j = 0; j < static_cast<int>(P::l̅); j++)
+                value += local_half_digit
+                         << (local_width - (j + 1) * P::B̅gbit);
+            return value;
+        }();
+        constexpr int fd_margin =
+            std::numeric_limits<double>::digits -
+            (2 * static_cast<int>(P::B̅gbit) + static_cast<int>(P::nbit) + 3);
+        static_assert(fd_margin > 0,
+                      "fused dense BSGS digit products must fit in double");
+        // Keep each Fourier-domain batch within the same exactness margin as
+        // the single-product digit FFT path.
+        constexpr int max_fused_terms = 1 << (fd_margin - 1);
+
+        using BabyComponentFFT = std::array<PolynomialInFD<P>, P::l̅>;
+        using BabyFFT = std::array<BabyComponentFFT, P::k + 1>;
+        auto baby_fft = std::make_unique<std::vector<BabyFFT>>(k_step);
+        auto torus_digit = std::make_unique<Polynomial<P>>();
+        for (int j1 = 0; j1 < k_step; j1++) {
+            for (int c = 0; c <= static_cast<int>(P::k); c++) {
+                for (int j = 0; j < static_cast<int>(P::l̅); j++) {
+                    const int torus_shift =
+                        width - (j + 1) * static_cast<int>(P::B̅gbit);
+                    for (uint32_t n = 0; n < P::n; n++) {
+                        const T adjusted = baby[j1][c][n] + offset;
+                        (*torus_digit)[n] =
+                            ((adjusted >> torus_shift) & torus_mask) -
+                            half_digit;
+                    }
+                    TwistIFFTDigit<P>((*baby_fft)[j1][c][j], *torus_digit);
+                }
+            }
+        }
+        std::vector<TRLWE<P>>().swap(baby);
+
+        bool res_initialized = false;
+        auto inner = std::make_unique<TRLWE<P>>();
+        auto giant_rotated = std::make_unique<TRLWE<P>>();
+        auto pre_rot_d = std::make_unique<std::array<uint64_t, P::n>>();
+        auto encoded_plain = std::make_unique<Polynomial<P>>();
+        auto plain_digit = std::make_unique<Polynomial<P>>();
+        auto product_acc = std::make_unique<PolynomialInFD<P>>();
+        auto digit_prod = std::make_unique<Polynomial<P>>();
+
+        for (int j2 = 0; j2 <= max_j2; j2++) {
+            if (groups[j2].empty()) continue;
+
+            using PlainTermFFT = std::array<PolynomialInFD<P>, plain_digits>;
+            auto plain_fft =
+                std::make_unique<std::vector<PlainTermFFT>>(groups[j2].size());
+            for (std::size_t t = 0; t < groups[j2].size(); t++) {
+                const std::size_t idx = groups[j2][t].second;
+                RotateSlotVector<P>(*pre_rot_d, diagonals[idx], -k_step * j2);
+                SlotEncode<P>(*encoded_plain, *pre_rot_d);
+                for (int d = 0; d < plain_digits; d++) {
+                    const int plain_shift = d * static_cast<int>(P::B̅gbit);
+                    for (uint32_t n = 0; n < P::n; n++) {
+                        const uint64_t coeff =
+                            static_cast<uint64_t>((*encoded_plain)[n]) %
+                            static_cast<uint64_t>(P::plain_modulus);
+                        (*plain_digit)[n] = static_cast<T>(
+                            (coeff >> plain_shift) & plain_mask);
+                    }
+                    TwistIFFTDigit<P>((*plain_fft)[t][d], *plain_digit);
+                }
+            }
+
+            for (int c = 0; c <= static_cast<int>(P::k); c++)
+                for (uint32_t n = 0; n < P::n; n++) (*inner)[c][n] = 0;
+
+            for (std::size_t batch_begin = 0; batch_begin < groups[j2].size();
+                 batch_begin += max_fused_terms) {
+                const std::size_t batch_end =
+                    std::min<std::size_t>(groups[j2].size(),
+                                          batch_begin + max_fused_terms);
+                for (int c = 0; c <= static_cast<int>(P::k); c++) {
+                    for (int j = 0; j < static_cast<int>(P::l̅); j++) {
+                        const int torus_shift =
+                            width - (j + 1) * static_cast<int>(P::B̅gbit);
+                        for (int d = 0; d < plain_digits; d++) {
+                            const int plain_shift =
+                                d * static_cast<int>(P::B̅gbit);
+                            const int shift = torus_shift + plain_shift;
+                            if (shift >= width) continue;
+
+                            const int first_j1 = groups[j2][batch_begin].first;
+                            MulInFD<P::n>(*product_acc,
+                                           (*baby_fft)[first_j1][c][j],
+                                           (*plain_fft)[batch_begin][d]);
+                            for (std::size_t t = batch_begin + 1;
+                                 t < batch_end; t++) {
+                                const int j1 = groups[j2][t].first;
+                                FMAInFD<P::n>(*product_acc,
+                                              (*baby_fft)[j1][c][j],
+                                              (*plain_fft)[t][d]);
+                            }
+                            TwistFFTDigitProduct<P>(*digit_prod, *product_acc);
+                            for (uint32_t n = 0; n < P::n; n++)
+                                (*inner)[c][n] += (*digit_prod)[n] << shift;
+                        }
+                    }
+                }
+            }
+
+            const TRLWE<P> *to_add;
+            if (j2 == 0) {
+                to_add = inner.get();
+            } else {
+                RotateSlots<P>(*giant_rotated, *inner, k_step * j2, gk);
+                to_add = giant_rotated.get();
+            }
+
+            if (!res_initialized) {
+                res = *to_add;
+                res_initialized = true;
+            } else {
+                for (int k = 0; k <= static_cast<int>(P::k); k++)
+                    for (uint32_t m = 0; m < P::n; m++)
+                        res[k][m] += (*to_add)[k][m];
+            }
+        }
+        return;
+    }
+
+    bool res_initialized = false;
+    auto inner = std::make_unique<TRLWE<P>>();
+    auto scaled = std::make_unique<TRLWE<P>>();
+    auto giant_rotated = std::make_unique<TRLWE<P>>();
+    auto pre_rot_d = std::make_unique<std::array<uint64_t, P::n>>();
+    for (int j2 = 0; j2 <= max_j2; j2++) {
+        if (groups[j2].empty()) continue;
+
+        // Inner accumulator: Σ_{j1} σ^{-k·j2}(d_idx) ∘ baby[j1].
+        bool inner_initialized = false;
+        for (auto &[j1, idx] : groups[j2]) {
+            RotateSlotVector<P>(*pre_rot_d, diagonals[idx], -k_step * j2);
+            if (!inner_initialized) {
+                SlotPtxtMul<P>(*inner, baby[j1], *pre_rot_d);
+                inner_initialized = true;
+            } else {
+                SlotPtxtMul<P>(*scaled, baby[j1], *pre_rot_d);
+                for (int k = 0; k <= static_cast<int>(P::k); k++)
+                    for (uint32_t m = 0; m < P::n; m++)
+                        (*inner)[k][m] += (*scaled)[k][m];
+            }
+        }
+
+        // Apply the giant rotation σ^{k·j2}.
+        const TRLWE<P> *to_add;
+        if (j2 == 0) {
+            to_add = inner.get();
+        } else {
+            RotateSlots<P>(*giant_rotated, *inner, k_step * j2, gk);
+            to_add = giant_rotated.get();
+        }
+
+        if (!res_initialized) {
+            res = *to_add;
+            res_initialized = true;
+        } else {
+            for (int k = 0; k <= static_cast<int>(P::k); k++)
+                for (uint32_t m = 0; m < P::n; m++)
+                    res[k][m] += (*to_add)[k][m];
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// makeRelinKeyFFT<P> — heap-safe relinearization key generation
+//
+// For large parameter sets (e.g. lvl3simdparam) the standard relinKeyFFTgen
+// creates a 4 MB relinKey + 2 MB relinKeyFFT on the stack, which overflows.
+// This function avoids that by:
+//   1. Allocating relinKeyFFT on the heap.
+//   2. Calling halftrgswSymEncrypt(HalfTRGSWFFT<P>&, ...) which already uses
+//      heap allocation internally for its HalfTRGSW<P> intermediate.
+//   3. Returning the result as a unique_ptr.
+//
+// Note: HalfTRGSWFFT<P> and relinKeyFFT<P> are the same underlying type
+// (aligned_array<TRLWEInFD<P>, P::l * P::l̅>), so the cast is valid.
+// ---------------------------------------------------------------------------
+
+template <class P>
+std::unique_ptr<relinKeyFFT<P>> makeRelinKeyFFT(const Key<P> &key)
+{
+    // relinKeyFFT<P> == HalfTRGSWFFT<P> (same type alias), allocate on heap.
+    // halftrgswSymEncrypt(HalfTRGSWFFT<P>&, ...) uses make_unique<HalfTRGSW<P>>
+    // internally, keeping the large intermediate off the stack.
+    auto relinkeyfft = std::make_unique<relinKeyFFT<P>>();
+    if constexpr (is_multilimb_uint_v<typename P::T>) {
+        auto keysquare = std::make_unique<Polynomial<P>>();
+        auto partkey = std::make_unique<Polynomial<P>>();
+        for (int i = 0; i < static_cast<int>(P::n); i++) (*partkey)[i] = key[i];
+        PolyMulDigit<P>(*keysquare, *partkey, *partkey);
+        halftrgswSymEncrypt<P>(*relinkeyfft, *keysquare, key);
+    }
+    else {
+        // Compute s^2 (key polynomial squared) — same as in relinKeygen
+        Polynomial<P> keysquare, partkey;
+        for (int i = 0; i < static_cast<int>(P::n); i++) partkey[i] = key[i];
+        PolyMulNaive<P>(keysquare, partkey, partkey);
+        halftrgswSymEncrypt<P>(*relinkeyfft, keysquare, key);
+    }
+    return relinkeyfft;
+}
+
+// ---------------------------------------------------------------------------
+// makeBootKeyFFT<P> — heap-safe boot key generation for BFV bootstrapping
+//
+// Generates a HalfTRGSWFFT encrypting the secret key s (circular encryption).
+// Uses gadget decomposition for noise-controlled multiplication in
+// HomomorphicInnerProduct: noise grows as l·Bg·√n·σ instead of ||ct[0]||·σ.
+// ---------------------------------------------------------------------------
+
+template <class P>
+std::unique_ptr<relinKeyFFT<P>> makeBootKeyFFT(const Key<P> &key)
+{
+    auto bootkeyfft = std::make_unique<relinKeyFFT<P>>();
+    if constexpr (is_multilimb_uint_v<typename P::T>) {
+        auto partkey = std::make_unique<Polynomial<P>>();
+        for (int i = 0; i < static_cast<int>(P::n); i++) (*partkey)[i] = key[i];
+        halftrgswSymEncrypt<P>(*bootkeyfft, *partkey, key);
+    }
+    else {
+        Polynomial<P> partkey;
+        for (int i = 0; i < static_cast<int>(P::n); i++) partkey[i] = key[i];
+        halftrgswSymEncrypt<P>(*bootkeyfft, partkey, key);
+    }
+    return bootkeyfft;
+}
+
+// ---------------------------------------------------------------------------
+// HomomorphicInnerProduct<P> — first step of BFV bootstrapping
+//
+// Given a BFV ciphertext ct = (a, b) where phase = b - a·s = Δ·m + noise,
+// and a boot key (HalfTRGSWFFT encrypting s), computes a fresh TRLWE
+// encrypting the phase of ct.
+//
+// TFHEpp convention: TRLWE = (ct[0], ct[1]) = (a, b), phase = b - a·s.
+//
+// The mask a = ct[0] is decomposed via the gadget and multiplied with the
+// boot key (HalfTRGSW(s)) using relinKeySwitch. This keeps noise growth
+// controlled regardless of the magnitude of a's coefficients.
+// ---------------------------------------------------------------------------
+
+template <class P>
+void HomomorphicInnerProduct(TRLWE<P> &res, const TRLWE<P> &ct,
+                             const relinKeyFFT<P> &bootkeyfft)
+{
+    // relinKeySwitch(ct[0], bootKey) → TRLWE(a·s)
+    relinKeySwitch<P>(res, ct[0], bootkeyfft);
+    // Subtract from trivial TRLWE(b):
+    //   new_mask = -res_mask,  new_body = b - res_body
+    // Phase: (b - res_body) - (-res_mask)·s = b - (res_body - res_mask·s) = b - a·s
+    for (int k = 0; k < P::k; k++)
+        for (uint32_t i = 0; i < P::n; i++)
+            res[k][i] = -res[k][i];
+    for (uint32_t i = 0; i < P::n; i++)
+        res[P::k][i] = ct[P::k][i] - res[P::k][i];
+}
+
+// ---------------------------------------------------------------------------
+// Baby-step/giant-step homomorphic polynomial evaluation
+//
+// Evaluates a cleartext polynomial f(X) = Σ coeffs[i]*X^i on an encrypted
+// value x, producing Enc(f(x)).  All slots are evaluated in parallel (SIMD).
+//
+// Algorithm:
+//   1. Choose k ≈ √degree, m = ⌈log₂(degree/k)⌉
+//   2. Baby step: precompute x, x², ..., x^k  (k-1 multiplications)
+//   3. Giant step: precompute x^k, x^{2k}, ..., x^{2^{m-1}·k}  (m-1 squarings)
+//   4. Recursively evaluate using Horner-like decomposition at x^{k·2^j} boundaries
+//
+// Coefficients are unsigned integers mod t (or t²).  The constant term is
+// encoded as a BFV plaintext (scaled by Δ) and added to the body.
+// Non-constant terms are applied via scalar-ciphertext multiplication
+// (multiply each TRLWE component by the scalar coefficient).
+// ---------------------------------------------------------------------------
+
+namespace polyeval {
+
+// Find optimal baby-step size k and giant-step depth m for degree d.
+// Minimizes total non-scalar multiplications ≈ k + m + (recursive overhead).
+inline std::pair<int, int> FindBSGSParams(int d)
+{
+    if (d <= 0) return {1, 0};
+    int best_k = 1, best_m = 0, best_cost = d + 1;
+    for (int k = 1; k <= d; k++) {
+        int m = 0;
+        { int reach = k; while (reach < d) { reach *= 2; m++; } }
+        // Cost: (k-1) baby muls + (m-1 if m>0) giant squarings + m recursive muls
+        int cost = (k - 1) + (m > 0 ? m - 1 : 0) + m;
+        if (cost < best_cost) {
+            best_cost = cost; best_k = k; best_m = m;
+        }
+        if (k > 2 * best_k) break;  // prune search
+    }
+    return {best_k, best_m};
+}
+
+// Largest power of 2 ≤ n (for balanced binary splitting in baby-step sum).
+inline int FloorPow2(int n)
+{
+    int p = 1;
+    while (2 * p <= n) p *= 2;
+    return p;
+}
+
+// Recursive evaluation of coefficient vector using precomputed powers.
+// coeffs[0..len-1] are the coefficients (index 0 = lowest power).
+// baby[1..k] = x^i.  giant[0..m-1] = x^{k·2^j}.
+// level = current giant-step level (counts down from m to 0).
+// Returns TRLWE encrypting Σ coeffs[i] * x^i.
+template <class P>
+void EvalRecursive(TRLWE<P> &res,
+                   const uint64_t *coeffs, int len,
+                   const std::vector<TRLWE<P>> &baby,
+                   const std::vector<TRLWE<P>> &giant,
+                   int level, int k,
+                   const relinKeyFFT<P> &rlk)
+{
+    if (len <= 0) {
+        // Zero
+        for (int c = 0; c <= static_cast<int>(P::k); c++)
+            for (uint32_t i = 0; i < P::n; i++)
+                res[c][i] = 0;
+        return;
+    }
+
+    if (level == 0) {
+        // Baby-step inner product: res = Σ_{i=0}^{len-1} coeffs[i] * x^i
+        // coeffs[0] is the constant term (add Δ*c to body).
+        // coeffs[i>0] multiply baby[i] by the scalar.
+        bool first = true;
+        for (int i = 0; i < len; i++) {
+            if (coeffs[i] == 0) continue;
+            if (i == 0) {
+                // Constant term: trivial TRLWE(Δ*c)
+                if (first) {
+                    for (int c = 0; c <= static_cast<int>(P::k); c++)
+                        for (uint32_t j = 0; j < P::n; j++)
+                            res[c][j] = 0;
+                    res[P::k][0] = bfvEncodeCoeff<P>(coeffs[0]);
+                    first = false;
+                } else {
+                    res[P::k][0] += bfvEncodeCoeff<P>(coeffs[0]);
+                }
+            } else {
+                // Non-constant: scalar * baby[i]
+                auto c_val = static_cast<typename P::T>(coeffs[i]);
+                if (first) {
+                    for (int c = 0; c <= static_cast<int>(P::k); c++)
+                        for (uint32_t j = 0; j < P::n; j++)
+                            res[c][j] = baby[i][c][j] * c_val;
+                    first = false;
+                } else {
+                    for (int c = 0; c <= static_cast<int>(P::k); c++)
+                        for (uint32_t j = 0; j < P::n; j++)
+                            res[c][j] += baby[i][c][j] * c_val;
+                }
+            }
+        }
+        if (first) {
+            // All coefficients were zero
+            for (int c = 0; c <= static_cast<int>(P::k); c++)
+                for (uint32_t j = 0; j < P::n; j++)
+                    res[c][j] = 0;
+        }
+        return;
+    }
+
+    // Giant-step split: split at index k * 2^(level-1)
+    int split = k;
+    for (int i = 0; i < level - 1; i++) split *= 2;
+    if (split > len) split = len;
+
+    // Lower part: coeffs[0..split-1], recurse with level-1.
+    // Keep recursive TRLWE temporaries off the stack for lvl3/p^2 BFV params.
+    auto lower = std::make_unique<TRLWE<P>>();
+    EvalRecursive<P>(*lower, coeffs, split, baby, giant, level - 1, k, rlk);
+
+    if (split >= len) {
+        // No upper part
+        res = *lower;
+        return;
+    }
+
+    // Upper part: coeffs[split..len-1], recurse with level-1
+    auto upper = std::make_unique<TRLWE<P>>();
+    EvalRecursive<P>(*upper, coeffs + split, len - split, baby, giant,
+                     level - 1, k, rlk);
+
+    // res = lower + upper * giant[level-1]
+    auto prod = std::make_unique<TRLWE<P>>();
+    TRLWEMultFullDD<P>(*prod, *upper, giant[level - 1], rlk);
+    for (int c = 0; c <= static_cast<int>(P::k); c++)
+        for (uint32_t i = 0; i < P::n; i++)
+            res[c][i] = (*lower)[c][i] + (*prod)[c][i];
+}
+
+}  // namespace polyeval
+
+// ---------------------------------------------------------------------------
+// PolyEval<P> — Evaluate cleartext polynomial on encrypted value
+//
+//   coeffs: f(X) = coeffs[0] + coeffs[1]*X + ... + coeffs[d]*X^d
+//           Each coefficient is in [0, t) or [0, t²) (unsigned).
+//   x:      TRLWE encrypting the input value (all slots evaluated in parallel)
+//   rlk:    Relinearization key for ciphertext-ciphertext multiplication
+//   res:    TRLWE encrypting f(x)
+// ---------------------------------------------------------------------------
+
+template <class P>
+void PolyEval(TRLWE<P> &res,
+              const std::vector<uint64_t> &coeffs,
+              const TRLWE<P> &x,
+              const relinKeyFFT<P> &rlk)
+{
+    int d = static_cast<int>(coeffs.size()) - 1;
+    if (d <= 0) {
+        // Constant or empty
+        for (int c = 0; c <= static_cast<int>(P::k); c++)
+            for (uint32_t i = 0; i < P::n; i++)
+                res[c][i] = 0;
+        if (!coeffs.empty() && coeffs[0] != 0) {
+            res[P::k][0] = bfvEncodeCoeff<P>(coeffs[0]);
+        }
+        return;
+    }
+
+    auto [k, m] = polyeval::FindBSGSParams(d);
+
+    // Baby step: baby[i] = x^i for i=1..k
+    std::vector<TRLWE<P>> baby(k + 1);
+    baby[1] = x;
+    for (int i = 2; i <= k; i++) {
+        int a = polyeval::FloorPow2(i - 1);  // balanced split for minimal depth
+        int b = i - a;
+        TRLWEMultFullDD<P>(baby[i], baby[a], baby[b], rlk);
+    }
+
+    // Giant step: giant[j] = x^{k*2^j} for j=0..m-1
+    std::vector<TRLWE<P>> giant(m);
+    if (m > 0) {
+        giant[0] = baby[k];
+        for (int j = 1; j < m; j++)
+            TRLWEMultFullDD<P>(giant[j], giant[j - 1], giant[j - 1], rlk);
+    }
+
+    // Recursive evaluation
+    polyeval::EvalRecursive<P>(res, coeffs.data(), d + 1,
+                               baby, giant, m, k, rlk);
+}
+
+}  // namespace TFHEpp

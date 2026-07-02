@@ -2,8 +2,11 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 
+#include "bfv/bfv-multilimb.hpp"
 #include "cuhe++.hpp"
+#include "fnt.hpp"
 #include "raintt.hpp"
 
 namespace TFHEpp {
@@ -20,6 +23,8 @@ enum class ErrorDistribution { ModularGaussian, CenteredBinomial };
 #include "params/compress.hpp"
 #elif defined(USE_CGGI19)
 #include "params/CGGI19.hpp"
+#elif defined(USE_BLOCK_BINARY)
+#include "params/blockbinary.hpp"
 #elif defined(USE_CONCRETE)
 #include "params/concrete.hpp"
 #elif defined(USE_TFHE_RS)
@@ -39,6 +44,8 @@ using cblvl2param = lvl2param;
 #ifndef USE_DIFFERENT_AH_PARAM
 using cbAHlvl2param = AHlvl2param;
 #endif
+
+using ckkslvl3param = lvl3simdparam;
 
 struct lvl01param {
     using domainP = lvl0param;
@@ -127,6 +134,11 @@ using PolynomialNTT = std::array<cuHEpp::INTorus, P::n>;
 template <class P>
 using PolynomialRAINTT = std::array<raintt::DoubleSWord, P::n>;
 template <class P>
+inline constexpr std::uint32_t FNTTransformedSize =
+    1U << (P::nbit + (P::nbit / (FNTpp::Kbit + 1)));
+template <class P>
+using PolynomialFNT = aligned_array<int64_t, FNTTransformedSize<P>>;
+template <class P>
 using DecomposedPolynomial = std::array<Polynomial<P>, P::l>;
 template <class P>
 using DecomposedNoncePolynomial = std::array<Polynomial<P>, P::lₐ>;
@@ -153,6 +165,8 @@ template <class P>
 using TRLWENTT = std::array<PolynomialNTT<P>, P::k + 1>;
 template <class P>
 using TRLWERAINTT = std::array<PolynomialRAINTT<P>, P::k + 1>;
+template <class P>
+using TRLWEFNT = std::array<PolynomialFNT<P>, P::k + 1>;
 
 template <class P>
 using TRGSW = std::array<TRLWE<P>, P::k * P::lₐ * P::l̅ₐ + P::l * P::l̅>;
@@ -166,6 +180,8 @@ template <class P>
 using TRGSWNTT = std::array<TRLWENTT<P>, P::k * P::lₐ * P::l̅ₐ + P::l * P::l̅>;
 template <class P>
 using TRGSWRAINTT = std::array<TRLWERAINTT<P>, P::k * P::lₐ * P::l̅ₐ + P::l * P::l̅>;
+template <class P>
+using TRGSWFNT = aligned_array<TRLWEFNT<P>, P::k * P::lₐ * P::l̅ₐ + P::l * P::l̅>;
 
 #ifdef USE_KEY_BUNDLE
 template <class P>
@@ -197,6 +213,9 @@ using BootstrappingKeyNTT =
 template <class P>
 using BootstrappingKeyRAINTT =
     std::array<TRGSWRAINTT<typename P::targetP>, P::domainP::k * P::domainP::n>;
+template <class P>
+using BootstrappingKeyFNT =
+    std::array<TRGSWFNT<typename P::targetP>, P::domainP::k * P::domainP::n>;
 
 template <class P>
 using KeySwitchingKey = std::array<
@@ -205,7 +224,7 @@ using KeySwitchingKey = std::array<
     P::domainP::k * P::domainP::n>;
 template <class P>
 using SubsetKeySwitchingKey = std::array<
-    std::array<std::array<TLWE<typename P::targetP>, (1 << P::basebit) - 1>,
+    std::array<std::array<TLWE<typename P::targetP>, (1 << (P::basebit - 1))>,
                P::t>,
     P::domainP::k * P::domainP::n - P::targetP::k * P::targetP::n>;
 template <class P>
@@ -299,27 +318,20 @@ using relinKeyFFT = aligned_array<TRLWEInFD<P>, P::l * P::l̅>;
     fun(lvlh2param);
 #endif
 #endif
-#ifdef ENABLE_AXELL
 #define TFHEPP_EXPLICIT_INSTANTIATION_KEY_SWITCH_TO_TLWE(fun) \
     fun(lvl10param);                                          \
-    fun(lvl11param);                                          \
+    fun(lvl1hparam);                                          \
     fun(lvl20param);                                          \
+    fun(lvl2hparam);                                          \
     fun(lvl21param);                                          \
     fun(lvl22param);                                          \
-    fun(lvlM0param);
-#else
-#define TFHEPP_EXPLICIT_INSTANTIATION_KEY_SWITCH_TO_TLWE(fun) \
-    fun(lvl10param);                                          \
-    fun(lvl11param);                                          \
-    fun(lvl20param);                                          \
-    fun(lvl21param);                                          \
-    fun(lvl22param);
-#endif
+    fun(lvl31param);
 #define TFHEPP_EXPLICIT_INSTANTIATION_KEY_SWITCH_TO_TRLWE(fun) \
     fun(lvl11param);                                           \
     fun(lvl21param);                                           \
     fun(lvl22param);
 #define TFHEPP_EXPLICIT_INSTANTIATION_SUBSET_KEY_SWITCH_TO_TLWE(fun) \
+    fun(lvl10param);                                                 \
     fun(lvl21param);
 #define TFHEPP_EXPLICIT_INSTANTIATION_SUBSET_KEY_SWITCH_TO_TRLWE(fun) \
     fun(lvl21param);

@@ -1,10 +1,5 @@
 file(GLOB_RECURSE tfhe++_sources "*.cpp")
 
-# cloudkey is template/header-driven in the current tree; the legacy .cpp is
-# stale and conflicts with the current EvalKey layout.
-list(REMOVE_ITEM tfhe++_sources
-     ${CMAKE_CURRENT_SOURCE_DIR}/cloudkey.cpp)
-
 # Exclude spqlios-arithmetic processor unless that backend is selected.
 if(NOT USE_SPQLIOS_ARITHMETIC)
   list(REMOVE_ITEM tfhe++_sources

@@ -45,6 +45,8 @@ FFT_Processor_Spqlios::~FFT_Processor_Spqlios() {
 thread_local FFT_Processor_Spqlios fftplvl1(TFHEpp::lvl1param::n);
 thread_local FFT_Processor_Spqlios fftplvl2(TFHEpp::lvl2param::n);
 thread_local FFT_Processor_Spqlios fftplvl3(TFHEpp::lvl3param::n);
+thread_local FFT_Processor_Spqlios fftplvl5(1 << 14);
+thread_local FFT_Processor_Spqlios fftplvl6(1 << 15);
 #endif
 
 using namespace std;
@@ -99,7 +101,7 @@ void FFT_Processor_Spqlios::execute_reverse_int(double *res, const int32_t *a) {
         "0:\n"
             "vmovdqu (%1),%%ymm0\n"         // Load 8 int32_t values from `ait` into ymm0
             "vcvtdq2pd %%ymm0,%%zmm1\n"     // Convert 8 int32_t values to 8 double-precision values
-            "vmovapd %%zmm1,(%0)\n"         // Store the result (8 doubles) in `dst`
+            "vmovupd %%zmm1,(%0)\n"         // Store the result (8 doubles) in `dst`
             "addq $32,%1\n"                 // Increment `ait` by 32 bytes (8 int32_t values)
             "addq $64,%0\n"                 // Increment `dst` by 64 bytes (8 double-precision values)
             "cmpq %2,%1\n"                  // Compare `ait` with `aend`
@@ -113,7 +115,7 @@ void FFT_Processor_Spqlios::execute_reverse_int(double *res, const int32_t *a) {
         "0:\n"
                 "vmovupd (%1),%%xmm0\n"
                 "vcvtdq2pd %%xmm0,%%ymm1\n"
-                "vmovapd %%ymm1,(%0)\n"
+                "vmovupd %%ymm1,(%0)\n"
                 "addq $16,%1\n"
                 "addq $32,%0\n"
                 "cmpq %2,%1\n"
@@ -313,5 +315,13 @@ void FFT_Processor_Spqlios::execute_direct_torus64_rescale_clpx(
     for (int i = 0; i < N; i++) real_inout_direct[i] = a[i] * _2sN;
 #endif
     fft(tables_direct, real_inout_direct);
+    constexpr double q = 9223372036854775808.0;  // 2^63
+    const double last_coeff = real_inout_direct[N - 1];
+    for (int i = N - 1; i > 0; i--)
+        real_inout_direct[i] = std::round(
+            (real_inout_direct[i - 1] - plain_modulus * real_inout_direct[i]) /
+            q);
+    real_inout_direct[0] =
+        std::round((-last_coeff - plain_modulus * real_inout_direct[0]) / q);
     f64_to_i64_avx2(res, real_inout_direct, N);
 }

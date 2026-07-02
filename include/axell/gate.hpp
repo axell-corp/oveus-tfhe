@@ -1,10 +1,10 @@
 #pragma once
 #include <array>
-#include <gatebootstrapping.hpp>
-#include <keyswitch.hpp>
+#include <tfhe/gatebootstrapping.hpp>
+#include <tfhe/keyswitch.hpp>
 #include <limits>
 #include <params.hpp>
-#include <trlwe.hpp>
+#include <tfhe/trlwe.hpp>
 
 namespace TFHEpp {
 

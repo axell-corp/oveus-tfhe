@@ -565,3 +565,5 @@ void FFT_Processor_Spqlios::execute_direct_torus64_rescale_clpx(
 thread_local FFT_Processor_Spqlios fftplvl1(TFHEpp::lvl1param::n);
 thread_local FFT_Processor_Spqlios fftplvl2(TFHEpp::lvl2param::n);
 thread_local FFT_Processor_Spqlios fftplvl3(TFHEpp::lvl3param::n);
+thread_local FFT_Processor_Spqlios fftplvl5(1 << 14);
+thread_local FFT_Processor_Spqlios fftplvl6(1 << 15);

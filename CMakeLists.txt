@@ -12,6 +12,7 @@ set(CMAKE_CXX_FLAGS
 
 option(USE_80BIT_SECURITY "Use 80bit security parameter(faster)" OFF)
 option(USE_CGGI19 "Use the parameter set proposed in CGGI19" OFF)
+option(USE_BLOCK_BINARY "Use Concrete-based parameters with block-binary lvl0 keys" OFF)
 option(USE_CONCRETE "Use the parameter set proposed in CONCRETE" OFF)
 option(USE_TFHE_RS "Use the parameter set proposed in TFHE-rs" OFF)
 option(USE_TERNARY "Use ternary secret keys" OFF)
@@ -113,6 +114,11 @@ if(USE_80BIT_SECURITY)
   add_compile_definitions(USE_80BIT_SECURITY)
 elseif(USE_CGGI19)
   add_compile_definitions(USE_CGGI19)
+elseif(USE_BLOCK_BINARY)
+  set(TFHEpp_DEFINITIONS
+      "${TFHEpp_DEFINITIONS};USE_BLOCK_BINARY"
+      PARENT_SCOPE)
+  add_compile_definitions(USE_BLOCK_BINARY)
 elseif(USE_CONCRETE)
   add_compile_definitions(USE_CONCRETE)
 elseif(USE_TFHE_RS)
@@ -120,6 +126,25 @@ elseif(USE_TFHE_RS)
 elseif(USE_TERNARY)
   add_compile_definitions(USE_TERNARY)
 endif()
+
+if(USE_SUBSET_KEY)
+  set(TFHEpp_DEFINITIONS
+      "${TFHEpp_DEFINITIONS};USE_SUBSET_KEY"
+      PARENT_SCOPE)
+  add_compile_definitions(USE_SUBSET_KEY)
+endif()
+
+if(NOT USE_TERNARY)
+  if(USE_KEY_BUNDLE)
+    set(TFHEpp_DEFINITIONS
+        "${TFHEpp_DEFINITIONS};USE_KEY_BUNDLE"
+        PARENT_SCOPE)
+    add_compile_definitions(USE_KEY_BUNDLE)
+  endif()
+endif()
+
+# if(USE_AVX512) string(APPEND CMAKE_CXX_FLAGS " -mprefer-vector-width=512")
+# endif()
 
 if(USE_FFTW3)
   add_compile_definitions(USE_FFTW3)

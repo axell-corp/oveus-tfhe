@@ -1,13 +1,41 @@
 #pragma once
 
+#include <memory>
+
+#if defined(USE_AVX512) || defined(__AVX2__)
+#include <immintrin.h>
+#endif
+
+#include "INTorus.hpp"
 #ifdef USE_FFTW3
 #include <fft_processor_fftw.h>
-#elif USE_SPQLIOS_INTL
-#include <fft_processor_spqlios_intl.h>
+#elif USE_MKL
+#include <fft_processor_mkl.hpp>
 #elif USE_SPQLIOX_AARCH64
 #include <fft_processor_spqliox_aarch64.h>
+#elif USE_CONCRETE_FFT
+#include <fft_processor_concrete.hpp>
+#elif USE_SPQLIOS_ARITHMETIC
+#include <fft_processor_spqlios_arithmetic.h>
+#elif USE_SPQLIOS_INTL
+#include <fft_processor_spqlios_intl.h>
 #else
 #include <fft_processor_spqlios.h>
+#endif
+
+#if !defined(USE_FFTW3) && !defined(USE_MKL) && \
+    !defined(USE_SPQLIOX_AARCH64) && !defined(USE_CONCRETE_FFT) && \
+    !defined(USE_SPQLIOS_ARITHMETIC)
+#define TFHEPP_HAS_MULTILIMB_SPQLIOS_FFT 1
+#else
+#define TFHEPP_HAS_MULTILIMB_SPQLIOS_FFT 0
+#endif
+#ifdef USE_HEXL
+#include "hexl/hexl.hpp"
+#endif
+
+#ifdef USE_INTERLEAVED_FORMAT
+#include <complex>
 #endif
 
 #include "cuhe++.hpp"
@@ -15,6 +43,57 @@
 #include "utils.hpp"
 
 namespace TFHEpp {
+
+template <uint32_t N>
+inline void MulInFD(std::array<double, N> &res,
+                    const std::array<double, N> &b);
+
+template <uint32_t N>
+inline void MulInFD(std::array<double, N> &res,
+                    const std::array<double, N> &a,
+                    const std::array<double, N> &b);
+
+template <class P>
+inline constexpr bool is_lvl3_fft_compatible_v =
+    std::is_same_v<P, lvl3param> || std::is_same_v<P, lvl3simdparam> ||
+    (std::is_same_v<typename P::T, __uint128_t> && P::n == lvl3param::n &&
+     P::nbit == lvl3param::nbit);
+
+template <class P>
+inline constexpr bool is_multilimb_digit_fft_compatible_v =
+    is_multilimb_uint_v<typename P::T> &&
+    ((P::nbit == 14 && P::n == (1U << 14)) ||
+     (P::nbit == 15 && P::n == (1U << 15)));
+
+template <class P>
+inline constexpr bool is_lvl5_digit_fft_compatible_v =
+    is_multilimb_digit_fft_compatible_v<P>;
+
+inline constexpr bool has_multilimb_digit_fft_backend_v =
+#if TFHEPP_HAS_MULTILIMB_SPQLIOS_FFT
+    true;
+#else
+    false;
+#endif
+
+template <class P>
+inline constexpr bool use_multilimb_digit_fft_v =
+    has_multilimb_digit_fft_backend_v &&
+    is_multilimb_digit_fft_compatible_v<P>;
+
+#if TFHEPP_HAS_MULTILIMB_SPQLIOS_FFT
+template <class P>
+inline auto &MultilimbDigitFFTProcessor()
+{
+    static_assert(is_multilimb_digit_fft_compatible_v<P>);
+    if constexpr (P::nbit == 14 && P::n == (1U << 14))
+        return fftplvl5;
+    else if constexpr (P::nbit == 15 && P::n == (1U << 15))
+        return fftplvl6;
+    else
+        static_assert(false_v<P>, "Undefined multi-limb digit FFT processor");
+}
+#endif
 
 inline const std::unique_ptr<
     const std::array<std::array<cuHEpp::INTorus, lvl1param::n>, 2>>
@@ -47,7 +126,7 @@ inline void TwistNTT(Polynomial<P> &res, PolynomialNTT<P> &a)
     if constexpr (std::is_same_v<P, lvl1param> ||
                   std::is_same_v<P, AHlvl1param>
 #ifdef ENABLE_AXELL
-                  || std::is_same_v<P, TFHEpp::lvlMparam>
+                  || std::is_same_v<P, lvlMparam>
 #endif
     )
 #ifdef USE_HEXL
@@ -74,7 +153,7 @@ inline void TwistFFT(Polynomial<P> &res, PolynomialInFD<P> &a)
     if constexpr (std::is_same_v<P, lvl1param> ||
                   std::is_same_v<P, AHlvl1param>
 #ifdef ENABLE_AXELL
-                  || std::is_same_v<P, TFHEpp::lvlMparam>
+                  || std::is_same_v<P, lvlMparam>
 #endif
     ) {
         if constexpr (std::is_same_v<typename P::T, uint32_t>)
@@ -85,14 +164,20 @@ inline void TwistFFT(Polynomial<P> &res, PolynomialInFD<P> &a)
         else if constexpr (std::is_same_v<typename P::T, uint64_t>)
             fftplvl1.execute_direct_torus64(res.data(), a.data());
     }
-    else if constexpr (std::is_same_v<P, lvl3param>) {
-        // For 128-bit lvl3param with Double Decomposition:
-        // Output is intermediate result that will be recombined
-        // Store in low 64 bits - reconstruction handles proper positioning
+    else if constexpr (is_lvl3_fft_compatible_v<P>) {
+        // Use rounding (execute_direct_torus64_rescale with D=1.0) and
+        // sign-extend the int64 result to __int128_t → __uint128_t.
+        // Both fixes are critical:
+        //  - Rounding (not truncation): ±0.5 truncation error per DD level
+        //    gets amplified by RecombineTRLWEFromDD positional shifts.
+        //  - Sign extension: negative convolution results stored as
+        //    uint64_t(2^64-x) must become uint128_t(2^128-x), not (2^64-x).
+        //    Without this, shifts < 64 bits produce wrong torus values.
         alignas(64) std::array<uint64_t, P::n> temp;
-        fftplvl3.execute_direct_torus64(temp.data(), a.data());
+        fftplvl3.execute_direct_torus64_rescale(temp.data(), a.data(), 1.0);
         for (int i = 0; i < P::n; i++)
-            res[i] = static_cast<__uint128_t>(temp[i]);
+            res[i] = static_cast<__uint128_t>(
+                static_cast<__int128_t>(static_cast<int64_t>(temp[i])));
     }
     else if constexpr (std::is_same_v<typename P::T, uint64_t>)
         fftplvl2.execute_direct_torus64(res.data(), a.data());
@@ -106,7 +191,7 @@ inline void TwistFFTAdd(Polynomial<P> &res, PolynomialInFD<P> &a)
     if constexpr (std::is_same_v<P, lvl1param> ||
                   std::is_same_v<P, AHlvl1param>
 #ifdef ENABLE_AXELL
-                  || std::is_same_v<P, TFHEpp::lvlMparam>
+                  || std::is_same_v<P, lvlMparam>
 #endif
     ) {
         if constexpr (std::is_same_v<typename P::T, uint32_t>)
@@ -114,11 +199,12 @@ inline void TwistFFTAdd(Polynomial<P> &res, PolynomialInFD<P> &a)
         else if constexpr (std::is_same_v<typename P::T, uint64_t>)
             fftplvl1.execute_direct_torus64_add(res.data(), a.data());
     }
-    else if constexpr (std::is_same_v<P, lvl3param>) {
+    else if constexpr (is_lvl3_fft_compatible_v<P>) {
         alignas(64) std::array<uint64_t, P::n> temp;
-        fftplvl3.execute_direct_torus64(temp.data(), a.data());
+        fftplvl3.execute_direct_torus64_rescale(temp.data(), a.data(), 1.0);
         for (int i = 0; i < P::n; i++)
-            res[i] += static_cast<__uint128_t>(temp[i]);
+            res[i] += static_cast<__uint128_t>(
+                static_cast<__int128_t>(static_cast<int64_t>(temp[i])));
     }
     else if constexpr (std::is_same_v<typename P::T, uint64_t>)
         fftplvl2.execute_direct_torus64_add(res.data(), a.data());
@@ -149,7 +235,7 @@ inline void TwistINTT(PolynomialNTT<P> &res, const Polynomial<P> &a)
     if constexpr (std::is_same_v<P, lvl1param> ||
                   std::is_same_v<P, AHlvl1param>
 #ifdef ENABLE_AXELL
-                  || std::is_same_v<P, TFHEpp::lvlMparam>
+                  || std::is_same_v<P, lvlMparam>
 #endif
     )
 #ifdef USE_HEXL
@@ -177,7 +263,7 @@ inline void TwistIFFT(PolynomialInFD<P> &res, const Polynomial<P> &a)
     if constexpr (std::is_same_v<P, lvl1param> ||
                   std::is_same_v<P, AHlvl1param>
 #ifdef ENABLE_AXELL
-                  || std::is_same_v<P, TFHEpp::lvlMparam>
+                  || std::is_same_v<P, lvlMparam>
 #endif
     ) {
         if constexpr (std::is_same_v<typename P::T, uint32_t>)
@@ -185,8 +271,8 @@ inline void TwistIFFT(PolynomialInFD<P> &res, const Polynomial<P> &a)
         if constexpr (std::is_same_v<typename P::T, uint64_t>)
             fftplvl1.execute_reverse_torus64(res.data(), a.data());
     }
-    else if constexpr (std::is_same_v<P, lvl3param>) {
-        // For 128-bit lvl3param with Double Decomposition:
+    else if constexpr (is_lvl3_fft_compatible_v<P>) {
+        // For 128-bit params with Double Decomposition:
         // Input is always decomposition digits (small integers in low 64 bits)
         // Use low 64 bits directly - no shift needed
         alignas(64) std::array<uint64_t, P::n> temp;
@@ -201,14 +287,231 @@ inline void TwistIFFT(PolynomialInFD<P> &res, const Polynomial<P> &a)
 }
 
 template <class P>
+inline void TwistIFFTDigit(PolynomialInFD<P> &res, const Polynomial<P> &a)
+{
+    static_assert(is_multilimb_uint_v<typename P::T>,
+                  "TwistIFFTDigit is only for multi-limb digit polynomials");
+#if TFHEPP_HAS_MULTILIMB_SPQLIOS_FFT
+    if constexpr (use_multilimb_digit_fft_v<P>) {
+        auto temp = std::make_unique<std::array<uint64_t, P::n>>();
+        for (uint32_t i = 0; i < P::n; i++)
+            (*temp)[i] = static_cast<uint64_t>(a[i]);
+        MultilimbDigitFFTProcessor<P>().execute_reverse_torus64(res.data(),
+                                                                temp->data());
+    }
+    else {
+        static_assert(false_v<P>, "Undefined multi-limb digit TwistIFFT!");
+    }
+#else
+    static_assert(false_v<P>,
+                  "Multi-limb digit FFT currently requires a SPQLIOS backend");
+#endif
+}
+
+template <class P>
+inline void TwistFFTDigitProduct(Polynomial<P> &res, PolynomialInFD<P> &a)
+{
+    static_assert(is_multilimb_uint_v<typename P::T>,
+                  "TwistFFTDigitProduct is only for multi-limb digit polynomials");
+#if TFHEPP_HAS_MULTILIMB_SPQLIOS_FFT
+    if constexpr (use_multilimb_digit_fft_v<P>) {
+        auto temp = std::make_unique<std::array<uint64_t, P::n>>();
+        MultilimbDigitFFTProcessor<P>().execute_direct_torus64_rescale(
+            temp->data(), a.data(), 1.0);
+        for (uint32_t i = 0; i < P::n; i++)
+            res[i] = static_cast<typename P::T>(
+                static_cast<int64_t>((*temp)[i]));
+    }
+    else {
+        static_assert(false_v<P>, "Undefined multi-limb digit TwistFFT!");
+    }
+#else
+    static_assert(false_v<P>,
+                  "Multi-limb digit FFT currently requires a SPQLIOS backend");
+#endif
+}
+
+template <class P>
+inline void PolyMulDigit(Polynomial<P> &res, const Polynomial<P> &a,
+                         const Polynomial<P> &b)
+{
+    static_assert(is_multilimb_uint_v<typename P::T>,
+                  "PolyMulDigit is only for multi-limb digit polynomials");
+
+    if constexpr (use_multilimb_digit_fft_v<P>) {
+        auto ffta = std::make_unique<PolynomialInFD<P>>();
+        auto fftb = std::make_unique<PolynomialInFD<P>>();
+        auto fftres = std::make_unique<PolynomialInFD<P>>();
+        TwistIFFTDigit<P>(*ffta, a);
+        TwistIFFTDigit<P>(*fftb, b);
+        MulInFD<P::n>(*fftres, *ffta, *fftb);
+        TwistFFTDigitProduct<P>(res, *fftres);
+    }
+    else {
+        using T = typename P::T;
+        for (int i = 0; i < static_cast<int>(P::n); i++) {
+            int64_t ri = 0;
+            for (int j = 0; j <= i; j++)
+                ri += multilimb_to_signed_i64(a[j]) *
+                      multilimb_to_signed_i64(b[i - j]);
+            for (int j = i + 1; j < static_cast<int>(P::n); j++)
+                ri -= multilimb_to_signed_i64(a[j]) *
+                      multilimb_to_signed_i64(b[P::n + i - j]);
+            res[i] = T::from_signed_i64(ri);
+        }
+    }
+}
+
+template <class P>
+inline void PolyMulTorusByDigit(Polynomial<P> &res, const Polynomial<P> &torus,
+                                const Polynomial<P> &digit)
+{
+    static_assert(is_multilimb_uint_v<typename P::T>,
+                  "PolyMulTorusByDigit is only for multi-limb torus types");
+    static_assert(P::l̅ * P::B̅gbit == std::numeric_limits<typename P::T>::digits,
+                  "PolyMulTorusByDigit expects Bbar digits to cover the torus");
+
+    using T = typename P::T;
+    constexpr int width = std::numeric_limits<T>::digits;
+    constexpr T half = T{1} << (P::B̅gbit - 1);
+    constexpr T mask = (T{1} << P::B̅gbit) - T{1};
+    constexpr T offset = [] {
+        constexpr int local_width = std::numeric_limits<T>::digits;
+        constexpr T local_half = T{1} << (P::B̅gbit - 1);
+        T value = 0;
+        for (int j = 0; j < static_cast<int>(P::l̅); j++)
+            value += local_half << (local_width - (j + 1) * P::B̅gbit);
+        return value;
+    }();
+
+    auto torus_digit = std::make_unique<Polynomial<P>>();
+    auto digit_prod = std::make_unique<Polynomial<P>>();
+    auto digit_fft = std::make_unique<PolynomialInFD<P>>();
+    auto torus_digit_fft = std::make_unique<PolynomialInFD<P>>();
+    auto prod_fft = std::make_unique<PolynomialInFD<P>>();
+
+    for (int n = 0; n < static_cast<int>(P::n); n++) res[n] = 0;
+    if constexpr (use_multilimb_digit_fft_v<P>)
+        TwistIFFTDigit<P>(*digit_fft, digit);
+
+    for (int j = 0; j < static_cast<int>(P::l̅); j++) {
+        const int shift = width - (j + 1) * P::B̅gbit;
+        for (int n = 0; n < static_cast<int>(P::n); n++) {
+            const T adjusted = torus[n] + offset;
+            (*torus_digit)[n] = ((adjusted >> shift) & mask) - half;
+        }
+
+        if constexpr (use_multilimb_digit_fft_v<P>) {
+            TwistIFFTDigit<P>(*torus_digit_fft, *torus_digit);
+            MulInFD<P::n>(*prod_fft, *torus_digit_fft, *digit_fft);
+            TwistFFTDigitProduct<P>(*digit_prod, *prod_fft);
+        }
+        else {
+            PolyMulDigit<P>(*digit_prod, *torus_digit, digit);
+        }
+        for (int n = 0; n < static_cast<int>(P::n); n++)
+            res[n] += (*digit_prod)[n] << shift;
+    }
+}
+
+template <class P, int PlainBits>
+inline void PolyMulTorusByUnsignedBits(Polynomial<P> &res,
+                                       const Polynomial<P> &torus,
+                                       const std::array<uint64_t, P::n> &plain)
+{
+    static_assert(is_multilimb_uint_v<typename P::T>,
+                  "PolyMulTorusByUnsignedBits is only for multi-limb torus types");
+    static_assert(PlainBits > 0 && PlainBits <= 64);
+    static_assert(P::l̅ * P::B̅gbit == std::numeric_limits<typename P::T>::digits,
+                  "PolyMulTorusByUnsignedBits expects Bbar digits to cover the torus");
+    static_assert(2 * static_cast<int>(P::B̅gbit) + static_cast<int>(P::nbit) + 3 <
+                      std::numeric_limits<double>::digits,
+                  "unsigned digit products must fit exactly in double");
+
+    using T = typename P::T;
+    constexpr int width = std::numeric_limits<T>::digits;
+    constexpr int plain_digits =
+        (PlainBits + static_cast<int>(P::B̅gbit) - 1) /
+        static_cast<int>(P::B̅gbit);
+    constexpr uint64_t plain_mask =
+        P::B̅gbit == 64 ? std::numeric_limits<uint64_t>::max()
+                        : ((uint64_t{1} << P::B̅gbit) - 1);
+    constexpr T half = T{1} << (P::B̅gbit - 1);
+    constexpr T torus_mask = (T{1} << P::B̅gbit) - T{1};
+    constexpr T offset = [] {
+        constexpr int local_width = std::numeric_limits<T>::digits;
+        constexpr T local_half = T{1} << (P::B̅gbit - 1);
+        T value = 0;
+        for (int j = 0; j < static_cast<int>(P::l̅); j++)
+            value += local_half << (local_width - (j + 1) * P::B̅gbit);
+        return value;
+    }();
+
+    auto plain_digit = std::make_unique<Polynomial<P>>();
+    auto torus_digit = std::make_unique<Polynomial<P>>();
+    auto digit_prod = std::make_unique<Polynomial<P>>();
+    auto plain_fft = std::make_unique<std::array<PolynomialInFD<P>, plain_digits>>();
+    auto torus_digit_fft = std::make_unique<PolynomialInFD<P>>();
+    auto prod_fft = std::make_unique<PolynomialInFD<P>>();
+
+    for (int n = 0; n < static_cast<int>(P::n); n++) res[n] = 0;
+
+    if constexpr (use_multilimb_digit_fft_v<P>) {
+        for (int d = 0; d < plain_digits; d++) {
+            const int plain_shift = d * static_cast<int>(P::B̅gbit);
+            for (int n = 0; n < static_cast<int>(P::n); n++)
+                (*plain_digit)[n] =
+                    static_cast<T>((plain[n] >> plain_shift) & plain_mask);
+            TwistIFFTDigit<P>((*plain_fft)[d], *plain_digit);
+        }
+    }
+
+    for (int j = 0; j < static_cast<int>(P::l̅); j++) {
+        const int torus_shift = width - (j + 1) * P::B̅gbit;
+        for (int n = 0; n < static_cast<int>(P::n); n++) {
+            const T adjusted = torus[n] + offset;
+            (*torus_digit)[n] = ((adjusted >> torus_shift) & torus_mask) - half;
+        }
+
+        if constexpr (use_multilimb_digit_fft_v<P>)
+            TwistIFFTDigit<P>(*torus_digit_fft, *torus_digit);
+
+        for (int d = 0; d < plain_digits; d++) {
+            const int plain_shift = d * static_cast<int>(P::B̅gbit);
+            const int shift = torus_shift + plain_shift;
+            if (shift >= width) continue;
+
+            if constexpr (use_multilimb_digit_fft_v<P>) {
+                MulInFD<P::n>(*prod_fft, *torus_digit_fft, (*plain_fft)[d]);
+                TwistFFTDigitProduct<P>(*digit_prod, *prod_fft);
+            }
+            else {
+                for (int n = 0; n < static_cast<int>(P::n); n++)
+                    (*plain_digit)[n] = static_cast<T>(
+                        (plain[n] >> plain_shift) & plain_mask);
+                PolyMulDigit<P>(*digit_prod, *torus_digit, *plain_digit);
+            }
+
+            for (int n = 0; n < static_cast<int>(P::n); n++)
+                res[n] += (*digit_prod)[n] << shift;
+        }
+    }
+}
+
+template <class P>
+inline void PolyMulTorusByUnsigned(Polynomial<P> &res,
+                                   const Polynomial<P> &torus,
+                                   const std::array<uint64_t, P::n> &plain)
+{
+    PolyMulTorusByUnsignedBits<P, static_cast<int>(P::plain_modulusbit)>(
+        res, torus, plain);
+}
+
+template <class P>
 inline void TwistIFFTUInt(PolynomialInFD<P> &res, const Polynomial<P> &a)
 {
     if constexpr (std::is_same_v<P, lvl1param> ||
-                  std::is_same_v<P, AHlvl1param>
-#ifdef ENABLE_AXELL
-                  || std::is_same_v<P, TFHEpp::lvlMparam>
-#endif
-    ) {
+                  std::is_same_v<P, AHlvl1param>) {
         if constexpr (std::is_same_v<typename P::T, uint32_t>)
             fftplvl1.execute_reverse_uint(res.data(), a.data());
         // if constexpr (std::is_same_v<typename P::T, uint64_t>)
@@ -542,7 +845,9 @@ inline void PolyMul(Polynomial<P> &res, const Polynomial<P> &a,
         TwistNTT<P>(res, ntta);
     }
     else if constexpr (std::is_same_v<typename P::T, __uint128_t>) {
-        // Naive for 128-bit types (FFT/NTT don't support 128-bit precision)
+        // Naive for 128-bit types (FFT/NTT don't support 128-bit precision).
+        // Interpret both operands as centered torus coefficients so plaintext
+        // constants represented as two's-complement negatives stay small.
         for (int i = 0; i < P::n; i++) {
             __uint128_t ri = 0;
             for (int j = 0; j <= i; j++)
@@ -551,6 +856,15 @@ inline void PolyMul(Polynomial<P> &res, const Polynomial<P> &a,
             for (int j = i + 1; j < P::n; j++)
                 ri -= static_cast<__int128_t>(a[j]) *
                       static_cast<__int128_t>(b[P::n + i - j]);
+            res[i] = ri;
+        }
+    }
+    else if constexpr (is_multilimb_uint_v<typename P::T>) {
+        for (int i = 0; i < P::n; i++) {
+            typename P::T ri = 0;
+            for (int j = 0; j <= i; j++) ri += a[j] * b[i - j];
+            for (int j = i + 1; j < P::n; j++)
+                ri -= a[j] * b[P::n + i - j];
             res[i] = ri;
         }
     }
@@ -592,7 +906,7 @@ template <class P>
 inline void PolyMulNaive(Polynomial<P> &res, const Polynomial<P> &a,
                          const Polynomial<P> &b)
 {
-    if constexpr (std::is_same_v<typename P::T, __uint128_t>) {
+    if constexpr (std::is_same_v<P, lvl3simdparam>) {
         for (int i = 0; i < P::n; i++) {
             __uint128_t ri = 0;
             for (int j = 0; j <= i; j++)
@@ -601,6 +915,15 @@ inline void PolyMulNaive(Polynomial<P> &res, const Polynomial<P> &a,
             for (int j = i + 1; j < P::n; j++)
                 ri -= static_cast<__int128_t>(a[j]) *
                       static_cast<__int128_t>(b[P::n + i - j]);
+            res[i] = ri;
+        }
+    }
+    else if constexpr (is_multilimb_uint_v<typename P::T>) {
+        for (int i = 0; i < P::n; i++) {
+            typename P::T ri = 0;
+            for (int j = 0; j <= i; j++) ri += a[j] * b[i - j];
+            for (int j = i + 1; j < P::n; j++)
+                ri -= a[j] * b[P::n + i - j];
             res[i] = ri;
         }
     }
@@ -683,17 +1006,31 @@ alignas(64) static const std::unique_ptr<
     const std::array<PolynomialInFD<lvl2param>, 2 * lvl2param::n>> xaittlvl2 =
     XaittGen<lvl2param>();
 #endif
-#ifdef USE_TERNARY
+
+template <class P>
+inline const std::array<PolynomialInFD<P>, 2 * P::n> &XaittTable()
+{
+    static const auto xaitt = XaittGen<P>();
+    return *xaitt;
+}
+
 template <class P>
 inline void PolynomialMulByXaiMinusOneInFD(PolynomialInFD<P> &res,
                                            const PolynomialInFD<P> &poly,
                                            const int a)
 {
-    const int mod = a % (2 * P::n);
-    const int index = mod > 0 ? mod : mod + (2 * P::n);
-    if constexpr (std::is_same_v<P, lvl1param>) {
-        MulInFD<P::n>(res, poly, (*xaittlvl1)[index]);
-    }
+    int index = a % (2 * P::n);
+    if (index < 0) index += 2 * P::n;
+    MulInFD<P::n>(res, poly, XaittTable<P>()[index]);
 }
-#endif
+
+template <class P>
+inline void PolynomialFMAByXaiMinusOneInFD(PolynomialInFD<P> &res,
+                                           const PolynomialInFD<P> &poly,
+                                           const int a)
+{
+    int index = a % (2 * P::n);
+    if (index < 0) index += 2 * P::n;
+    FMAInFD<P::n>(res, poly, XaittTable<P>()[index]);
+}
 }  // namespace TFHEpp

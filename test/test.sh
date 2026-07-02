@@ -4,15 +4,15 @@ set -eu
 
 # thanks to https://qiita.com/Hayao0819/items/0e04b39b0804a0d16020
 contains() {
+    local needle=$1
+    shift
     local i
-    for i in $2{[@]}; do
-        if [[ ${i} = ${1} ]]; then
-            echo "TRUE"
-            return
+    for i in "$@"; do
+        if [[ ${i} = ${needle} ]]; then
+            return 0
         fi
     done
-    echo "FALSE"
-    return
+    return 1
 }
 
 SCRIPT_DIR=$(cd $(dirname $0); pwd)
@@ -20,14 +20,66 @@ cd $SCRIPT_DIR
 
 ./show_info.sh
 
-TEST_BINARIES=`find . -maxdepth 2 -perm -111 -type f`
-IGNORED_BINARIES=('./axell/tfhe_integer')
-for TEST_BINARY in $TEST_BINARIES
+if [[ $# -gt 0 ]]; then
+    TEST_DIRS=()
+    for TEST_DIR in "$@"
+    do
+        case "$TEST_DIR" in
+            ./*|/*) TEST_DIRS+=("$TEST_DIR") ;;
+            *) TEST_DIRS+=("./$TEST_DIR") ;;
+        esac
+    done
+else
+    TEST_DIRS=(
+        './common'
+        './tfhe'
+        './bfv'
+        './clpx'
+        './ckks'
+    )
+    if [[ -d './axell' ]]; then
+        TEST_DIRS+=('./axell')
+    fi
+fi
+TEST_BINARIES=()
+for TEST_DIR in "${TEST_DIRS[@]}"
 do
-    RES=`contains $TEST_BINARY "${IGNORED_BINARIES[*]}"`
-    if [[ $RES == "TRUE" ]]; then
+    if [[ ! -d ${TEST_DIR} ]]; then
+        continue
+    fi
+    while IFS= read -r TEST_BINARY
+    do
+        TEST_BINARIES+=("${TEST_BINARY}")
+    done < <(find "${TEST_DIR}" -maxdepth 1 -perm -111 -type f | sort)
+done
+if [[ ${#TEST_BINARIES[@]} -eq 0 ]]; then
+    echo "No test binaries found for: ${TEST_DIRS[*]}" >&2
+    exit 1
+fi
+IGNORED_BINARIES=(
+    './tfhe/largelut_cmux_benchmark'
+    './tfhe/largelut_random_key_diagnostic'
+    './axell/1brFullAdder'
+    './axell/2bit1brAdder'
+    './axell/2bit2brAdder'
+    './axell/2brFullAdder'
+    './axell/3inputfulladder'
+    './axell/4input'
+    './axell/Tree1brAdder'
+    './axell/ao3'
+    './axell/aoi3'
+    './axell/fulladder'
+    './axell/halfadder'
+    './axell/oai3'
+    './axell/swap'
+    './axell/tfhe_integer'
+    './axell/xornandnor'
+)
+for TEST_BINARY in "${TEST_BINARIES[@]}"
+do
+    if contains "$TEST_BINARY" "${IGNORED_BINARIES[@]}"; then
         continue
     fi
     echo "==== Testing $TEST_BINARY ===="
-    ./$TEST_BINARY
+    "$TEST_BINARY"
 done
