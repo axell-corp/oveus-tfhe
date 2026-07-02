@@ -42,6 +42,20 @@ void HomHalfAdder(TLWE<lvl1param> &carry, TLWE<lvl1param> &sum,
                   const TLWE<lvl1param> &c1, const TLWE<lvl1param> &c0,
                   const EvalKey &ek)
 {
+    if constexpr (std::is_same_v<P, lvl1param>) {
+        TLWE<lvl1param> cnand, cnor;
+        HomXORNANDNOR(sum, cnand, cnor, c1, c0, ek);
+        for (int i = 0; i <= lvl1param::k * lvl1param::n; i++)
+            carry[i] = -cnand[i];
+        return;
+    }
+    else if constexpr (std::is_same_v<P, lvlMparam>) {
+        TLWE<lvlMparam> cz{};
+        cz[P::k * P::n] = -P::μ;
+        HomFullAdder(carry, sum, c1, c0, cz, ek);
+        return;
+    }
+
     TRLWE<P> trlwe;
     for (int i = 0; i <= P::k * P::n; i++)
         sum[i] = c0[i] + c1[i];  // use sum as buffer

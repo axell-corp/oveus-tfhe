@@ -61,21 +61,6 @@ IGNORED_BINARIES=(
     './tfhe/largelut_benchmark'
     './tfhe/largelut_cmux_benchmark'
     './tfhe/largelut_random_key_diagnostic'
-    './axell/1brFullAdder'
-    './axell/2bit1brAdder'
-    './axell/2bit2brAdder'
-    './axell/2brFullAdder'
-    './axell/3inputfulladder'
-    './axell/4input'
-    './axell/Tree1brAdder'
-    './axell/ao3'
-    './axell/aoi3'
-    './axell/fulladder'
-    './axell/halfadder'
-    './axell/oai3'
-    './axell/swap'
-    './axell/tfhe_integer'
-    './axell/xornandnor'
 )
 for TEST_BINARY in "${TEST_BINARIES[@]}"
 do

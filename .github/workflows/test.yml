@@ -153,7 +153,7 @@ jobs:
             -DENABLE_AXELL=ON
           cmake --build build --target test_common test_tfhe test_axell
           cd build
-          test/test.sh common tfhe
+          test/test.sh common tfhe axell
 
   tfhe-block-binary:
     name: tfhe-block-binary-gcc-24.04
