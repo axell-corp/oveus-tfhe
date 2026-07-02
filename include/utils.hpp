@@ -13,6 +13,9 @@
 #include <random>
 #include <type_traits>
 
+#ifdef USE_BLAKE3
+#include "BLAKE3PRNG.hpp"
+#endif
 #include "bfv/bfv-multilimb.hpp"
 
 #ifdef __AVX2__
@@ -23,6 +26,9 @@ namespace TFHEpp {
 #ifdef USE_RANDEN
 static thread_local std::random_device trng;
 static thread_local randen::Randen<uint64_t> generator(trng());
+#elif defined(USE_BLAKE3)
+static thread_local std::random_device trng;
+static thread_local BLAKE3PRNG::BLAKE3PRNG<uint64_t> generator(trng);
 #else
 static thread_local std::random_device generator;
 #endif

@@ -57,6 +57,8 @@ if [[ ${#TEST_BINARIES[@]} -eq 0 ]]; then
     exit 1
 fi
 IGNORED_BINARIES=(
+    './tfhe/ascon_aes_decrypt_benchmark'
+    './tfhe/largelut_benchmark'
     './tfhe/largelut_cmux_benchmark'
     './tfhe/largelut_random_key_diagnostic'
     './axell/1brFullAdder'

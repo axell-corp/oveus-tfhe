@@ -31,6 +31,10 @@ target_include_directories(
     ${PROJECT_SOURCE_DIR}/thirdparties/AES/src
     ${PROJECT_SOURCE_DIR}/thirdparties/cereal/include)
 
+if(USE_BLAKE3)
+  target_link_libraries(tfhe++ PUBLIC blake3)
+endif()
+
 if(USE_RANDEN)
   if(USE_FFTW3)
     target_link_libraries(tfhe++ INTERFACE fftwproc randen fftw3)

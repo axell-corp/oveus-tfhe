@@ -1,5 +1,4 @@
 #include <cassert>
-#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <tfhe++.hpp>
@@ -48,12 +47,9 @@ int main()
 
     {
         TFHEpp::EvalKey ek(sk);
-        if (std::getenv("TFHEPP_CEREAL_EVAL_KEYS") != nullptr)
-            ek.emplaceiksk<TFHEpp::lvl10param>(sk);
-        if (std::getenv("TFHEPP_CEREAL_HEAVY_KEYS") != nullptr) {
-            ek.emplacebkfft<TFHEpp::lvl01param>(sk);
-            ek.emplacebkntt<TFHEpp::lvl01param>(sk);
-        }
+        ek.emplacebkfft<TFHEpp::lvl01param>(sk);
+        ek.emplacebkntt<TFHEpp::lvl01param>(sk);
+        ek.emplaceiksk<TFHEpp::lvl10param>(sk);
         {
             std::ofstream ofs{"./gatekey.key", std::ios::binary};
             cereal::PortableBinaryOutputArchive ar(ofs);
