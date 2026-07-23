@@ -9,6 +9,20 @@ if(ENABLE_AXELL)
     list(APPEND test_directories axell)
 endif()
 
+# The default 128-bit parameter set is the only one whose TRLWE levels all use
+# k=1 keys and that provides the multi-limb scheme scaffolds; tests requiring
+# them are skipped for the alternative parameter sets.
+set(default_parameter_set ON)
+if(USE_80BIT_SECURITY
+   OR USE_COMPRESS
+   OR USE_CGGI19
+   OR USE_BLOCK_BINARY
+   OR USE_CONCRETE
+   OR USE_TFHE_RS
+   OR USE_TERNARY)
+    set(default_parameter_set OFF)
+endif()
+
 foreach(test_source ${test_sources})
     get_filename_component(test_name ${test_source} NAME_WE)
     get_filename_component(test_dir ${test_source} DIRECTORY)
@@ -25,6 +39,15 @@ foreach(test_source ${test_sources})
         continue()
     endif()
     if(test_name STREQUAL "blockbinary_nand" AND NOT USE_SUBSET_KEY)
+        continue()
+    endif()
+    if(test_name MATCHES "^largelut" AND NOT default_parameter_set)
+        # largelut R2RPKS requires k=1 TRLWE keys.
+        continue()
+    endif()
+    if(test_name STREQUAL "gatebootstrappingtlwe2tlwedoubledecomposition"
+       AND USE_BLOCK_BINARY)
+        # The block-binary FFT blind rotation only supports lbar = 1.
         continue()
     endif()
     add_executable(${test_name} ${test_source})

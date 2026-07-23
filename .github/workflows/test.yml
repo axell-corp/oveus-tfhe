@@ -5,74 +5,42 @@ on:
 
 jobs:
   scheme-tests:
-    name: ${{ matrix.scheme }}-${{ matrix.compiler }}-${{ matrix.ubuntu }}
+    name: ${{ matrix.scheme }}-${{ matrix.compiler }}-26.04
     runs-on: ubuntu-latest
     container:
-      image: ubuntu:${{ matrix.ubuntu }}
+      image: ubuntu:26.04
     strategy:
       fail-fast: false
       matrix:
+        scheme: [tfhe, bfv, clpx, ckks]
+        compiler: [gcc, clang]
+        # Non-TFHE schemes are tested with clang only to reduce the CI load.
+        exclude:
+          - scheme: bfv
+            compiler: gcc
+          - scheme: clpx
+            compiler: gcc
+          - scheme: ckks
+            compiler: gcc
         include:
           - scheme: tfhe
-            ubuntu: "24.04"
-            compiler: gcc
-            compiler_flags: -DCMAKE_CXX_COMPILER=g++ -DCMAKE_C_COMPILER=gcc
-            build_targets: test_common test_tfhe
-            test_dirs: common tfhe
-          - scheme: tfhe
-            ubuntu: "24.04"
-            compiler: clang
-            compiler_flags: -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang
-            build_targets: test_common test_tfhe
-            test_dirs: common tfhe
-          - scheme: tfhe
-            ubuntu: "26.04"
-            compiler: gcc
-            compiler_flags: -DCMAKE_CXX_COMPILER=g++ -DCMAKE_C_COMPILER=gcc
-            build_targets: test_common test_tfhe
-            test_dirs: common tfhe
-          - scheme: tfhe
-            ubuntu: "26.04"
-            compiler: clang
-            compiler_flags: -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang
             build_targets: test_common test_tfhe
             test_dirs: common tfhe
           - scheme: bfv
-            ubuntu: "24.04"
-            compiler: gcc
-            compiler_flags: -DCMAKE_CXX_COMPILER=g++ -DCMAKE_C_COMPILER=gcc
-            build_targets: test_bfv
-            test_dirs: bfv
-          - scheme: bfv
-            ubuntu: "24.04"
-            compiler: clang
-            compiler_flags: -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang
             build_targets: test_bfv
             test_dirs: bfv
           - scheme: clpx
-            ubuntu: "24.04"
-            compiler: gcc
-            compiler_flags: -DCMAKE_CXX_COMPILER=g++ -DCMAKE_C_COMPILER=gcc
-            build_targets: test_clpx
-            test_dirs: clpx
-          - scheme: clpx
-            ubuntu: "24.04"
-            compiler: clang
-            compiler_flags: -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang
             build_targets: test_clpx
             test_dirs: clpx
           - scheme: ckks
-            ubuntu: "24.04"
-            compiler: gcc
+            build_targets: test_ckks
+            test_dirs: ckks
+          - compiler: gcc
             compiler_flags: -DCMAKE_CXX_COMPILER=g++ -DCMAKE_C_COMPILER=gcc
-            build_targets: test_ckks
-            test_dirs: ckks
-          - scheme: ckks
-            ubuntu: "24.04"
-            compiler: clang
-            compiler_flags: -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang
-            build_targets: test_ckks
-            test_dirs: ckks
+          # clang-22 is the newest clang in the Ubuntu 26.04 repositories;
+          # the plain "clang" metapackage still points at clang 21.
+          - compiler: clang
+            compiler_flags: -DCMAKE_CXX_COMPILER=clang++-22 -DCMAKE_C_COMPILER=clang-22
     steps:
       - name: Install libraries
         run: |
@@ -80,13 +48,16 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y \
             git build-essential g++ libomp-dev cmake ninja-build
           if [ "${{ matrix.compiler }}" = "clang" ]; then
-            DEBIAN_FRONTEND=noninteractive apt-get install -y clang lld
+            DEBIAN_FRONTEND=noninteractive apt-get install -y clang-22 lld-22
           fi
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Configure
+      # Configure, build, and run in a single step: -march=native and the
+      # AVX-512 detection happen at configure time, so the binaries must be
+      # built and executed on the same machine.
+      - name: Build and run scheme tests
         run: |
           cmake . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -94,11 +65,7 @@ jobs:
             -DCMAKE_CXX_FLAGS_RELEASE="-O3" \
             -DCMAKE_C_FLAGS_RELEASE="-O3" \
             ${{ matrix.compiler_flags }}
-      - name: Build scheme tests
-        run: |
           cmake --build build --target ${{ matrix.build_targets }}
-      - name: Run scheme tests
-        run: |
           cd build
           # CKKS CI intentionally runs only the normal lightweight test
           # executables. Do not pass lvl6 keygen/run/all flags here; those
@@ -106,10 +73,10 @@ jobs:
           test/test.sh ${{ matrix.test_dirs }}
 
   tfhe-concrete:
-    name: tfhe-concrete-gcc-24.04
+    name: tfhe-concrete-gcc-26.04
     runs-on: ubuntu-latest
     container:
-      image: ubuntu:24.04
+      image: ubuntu:26.04
     steps:
       - name: Install libraries
         run: |
@@ -156,10 +123,10 @@ jobs:
           test/test.sh common tfhe axell
 
   tfhe-block-binary:
-    name: tfhe-block-binary-gcc-24.04
+    name: tfhe-block-binary-gcc-26.04
     runs-on: ubuntu-latest
     container:
-      image: ubuntu:24.04
+      image: ubuntu:26.04
     steps:
       - name: Install libraries
         run: |
@@ -177,15 +144,15 @@ jobs:
             -DENABLE_TEST=ON \
             -DUSE_BLOCK_BINARY=ON \
             -DUSE_SUBSET_KEY=ON
-          cmake --build build --target blockbinary_blindrotatefft blockbinary_nand
-          build/test/tfhe/blockbinary_blindrotatefft
-          build/test/tfhe/blockbinary_nand
+          cmake --build build --target test_tfhe
+          cd build
+          test/test.sh tfhe
 
   tfhe-raintt:
-    name: tfhe-raintt-gcc-24.04
+    name: tfhe-raintt-gcc-26.04
     runs-on: ubuntu-latest
     container:
-      image: ubuntu:24.04
+      image: ubuntu:26.04
     steps:
       - name: Install libraries
         run: |
@@ -208,10 +175,10 @@ jobs:
           build/test/tfhe/gatebootstrappingtlwe2tlweraintt
 
   tutorial:
-    name: tutorial-gcc-24.04
+    name: tutorial-gcc-26.04
     runs-on: ubuntu-latest
     container:
-      image: ubuntu:24.04
+      image: ubuntu:26.04
     steps:
       - name: Install libraries
         run: |
