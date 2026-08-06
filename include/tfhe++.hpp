@@ -3,6 +3,7 @@
 #include "bfv/bfv++.hpp"
 #include "clpx/bfv-clpx.hpp"
 #include "tfhe/circuitbootstrapping.hpp"
+#include "tfhe/batchboot.hpp"
 #include "tfhe/cloudkey.hpp"
 #include "tfhe/cmuxmem.hpp"
 #include "tfhe/detwfa.hpp"
@@ -46,6 +47,8 @@
 #include "bfv/bfv-bootstrapping.hpp"
 #include "bfv/bfv-gbfv.hpp"
 #include "ckks/ckks.hpp"
+#include "gl/gl.hpp"
+#include "gl/gl-bootstrap.hpp"
 
 // Application
 #include "tfhe/aes.hpp"

@@ -4,7 +4,7 @@ file(COPY test.sh DESTINATION ${CMAKE_CURRENT_BINARY_DIR} FILE_PERMISSIONS OWNER
 file(COPY show_info.sh DESTINATION ${CMAKE_CURRENT_BINARY_DIR} FILE_PERMISSIONS OWNER_READ OWNER_EXECUTE)
 file(COPY benchmark_docker.sh DESTINATION ${CMAKE_CURRENT_BINARY_DIR} FILE_PERMISSIONS OWNER_READ OWNER_EXECUTE)
 
-set(test_directories common tfhe bfv clpx ckks)
+set(test_directories common tfhe bfv clpx ckks gl)
 if(ENABLE_AXELL)
     list(APPEND test_directories axell)
 endif()
@@ -43,6 +43,15 @@ foreach(test_source ${test_sources})
     endif()
     if(test_name MATCHES "^largelut" AND NOT default_parameter_set)
         # largelut R2RPKS requires k=1 TRLWE keys.
+        continue()
+    endif()
+    if(test_name STREQUAL "batchboot" AND NOT default_parameter_set)
+        # The BatchBoot integration test exercises the default k=1 level-1
+        # ring and the default four-row level-2 circuit-bootstrap gadget.
+        continue()
+    endif()
+    if(test_dir STREQUAL "gl" AND NOT default_parameter_set)
+        # GL uses the active-level 128-bit/multi-limb CKKS arithmetic backend.
         continue()
     endif()
     if(test_name STREQUAL "gatebootstrappingtlwe2tlwedoubledecomposition"

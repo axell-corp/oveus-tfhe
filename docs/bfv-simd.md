@@ -159,17 +159,81 @@ TFHEpp::trlweSlotDecrypt<P>(result, ct_mul, key);
 // result[i] == (slots_a[i] * slots_b[i]) % 114689
 ```
 
+## Bootstrapping (lvl5bootparam)
+
+`include/bfv/bfv-bootstrapping.hpp` implements a digit-extraction bootstrap
+for the multi-limb n = 2^15, Q = 2^640, p = 786433 ring.  It uses the
+dedicated `lvl5bootparam` parameter set (not `lvl5param`, which the GL scheme
+builds on) and runs
+
+```
+Enc_p(slots) --SlotToCoeff@p--> coefficients
+             --ModSwitch(p^2) + NoisyDecrypt--> Enc_{p^2}(p*m + e) coefficients
+             --CoeffToSlot@p^2--> Enc_{p^2}(p*m + e) slots
+             --PolyEval(digit-removal, B=23)--> Enc_{p^2}(p*m) slots
+             --ProjectToBase--> Enc_p(m) slots
+```
+
+Design constraints discovered while validating the pipeline (see
+`Parameter-Selection/python/BFVnoise.py --preset tfhepp-lvl5-boot --nbit 15
+--qbits 640`):
+
+- Both linear maps must be the **dense** BSGS diagonal transforms.  The
+  FFT-style CRT factors in `bfv-c2s.hpp` are logically correct but amplify
+  early-stage automorphism noise by the product of all later twiddle norms
+  (~2^325 at these parameters), which wraps the torus.
+- The digit-extraction stage is mandatory: projecting `Enc_{p^2}(p*m + e)` to
+  plaintext modulus p only reinterprets the phase, so the low digit `e`
+  survives as noise and any later linear map destroys the plaintext.
+- The key-switch gadget must cover almost the full torus (`l*Bgbit = 630` of
+  640 bits): the digit-removal PolyEval multiplies invariant noise variance
+  by ~2^641 (degree 61) to ~2^761 (degree 93), so the CoeffToSlot output
+  feeding it (dominated by automorphism key-switch noise amplified ~2^52 by
+  the dense p^2 map) must stay far below the p^2 correctness threshold.
+- The secret key is sampled uniformly from the weight-96 ternary slice
+  (`bfv_key_hamming_weight`): `keyGen<lvl5bootparam>` chooses the support
+  uniformly without replacement and then chooses all nonzero signs
+  independently and uniformly.  `MakeBootstrapKey` rejects a key outside
+  this support.  The mod-switch digit error has stddev
+  `sqrt((1+h)/12)` ≈ 2.84, making B = 23 an 8.1σ bound.  Degree 4B+1 = 93
+  keeps the removal-polynomial BSGS at (k=3, m=5); larger B crosses a depth
+  cliff worth ~120 variance bits.
+- The 640-bit modulus makes the bootstrap **self-composable with room to
+  compute**: the refreshed ciphertext's noise (~2^491) sits far below the
+  ~2^571 input tolerance of the next bootstrap, and each base-p
+  ciphertext-ciphertext multiplication costs only ~2^28 absolute growth, so
+  a bootstrap cycle supports ~2 multiplications.  At Q = 2^448 the same
+  pipeline is single-shot only.
+- **Security forces n = 2^15 and sizes h and q**: with the ≳2^500 modulus
+  headroom the digit extraction requires, an n = 2^14 ring caps LWE security
+  at ~2^64.  At n = 2^15 the binding attack on sparse keys is the hybrid
+  primal MITM (`bdd_mitm_hybrid` in the Parameter-Selection
+  lattice-estimator, BDGL16 classical): h = 64 at q = 2^576 sits at ~2^130
+  (no margin), while the chosen h = 96, σ = 2^33, q = 2^640 has a
+  balanced-sign proxy cost of ~2^140 in the checked-in estimator;
+  non-hybrid attacks (usvp/bdd/dual) all exceed 2^180.  The proof sampler
+  has independent signs, so the 48-positive/48-negative estimator input is
+  its modal fixed-sign-count proxy rather than its exact law.  See
+  `Parameter-Selection/python/estimates/lvl5boot_{check,sweep,full,margin,q640}.py`.
+
+`test/bfv/bfv_multilimb.cpp` under `TFHEPP_BFV_LVL5_BOOTSTRAP_FULL_TEST=1`
+checks the digit-error bound, a single bootstrap, bootstrap-of-bootstrap, and
+bootstrap-of-(bootstrap-output × fresh ciphertext) end-to-end.
+
 ## Files
 
 | File | Contents |
 |------|----------|
 | `include/bfv/bfv-slots.hpp` | SlotEncode/Decode, encrypt/decrypt, GaloisKey, rotation |
 | `include/bfv/bfv++.hpp` | TRLWEMultFullDD, Wide384, relinearization |
-| `include/params/128bit.hpp` | `lvl3simdparam` definition |
+| `include/bfv/bfv-bootstrapping.hpp` | Digit-extraction bootstrap pipeline |
+| `include/tfhe/key.hpp` | Proof-compatible fixed-weight ternary key sampler |
+| `include/params/128bit.hpp` | `lvl3simdparam`, `lvl5bootparam` definitions |
 | `include/mulfft.hpp` | TwistFFT/TwistIFFT with sign-extension + rounding |
 | `test/bfv/simd_encode.cpp` | Encode/decode round-trip test |
 | `test/bfv/simd_ops.cpp` | Addition + multiplication test |
 | `test/bfv/simd_rotation.cpp` | Slot rotation test |
+| `test/bfv/bfv_multilimb.cpp` | Multi-limb scaffold + env-gated bootstrap test |
 
 ## Limitations
 
