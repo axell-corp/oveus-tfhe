@@ -1,11 +1,29 @@
 [![Test](https://github.com/axell-corp/oveus-tfhe/actions/workflows/test.yml/badge.svg)](https://github.com/axell-corp/oveus-tfhe/actions/workflows/test.yml)
 # oveus-tfhe
 This repository contains the TFHE library for oveus based on [TFHEpp](https://github.com/virtualsecureplatform/TFHEpp).
-Some performance improvements described in [this paper](https://doi.org/10.1145/3474366.3486927) and some UX improvements are applied.
+Some performance improvements for logic gates described in [WAHC 2021 paper](https://doi.org/10.1145/3474366.3486927), for integer operations in the TCHES 2026 paper and some UX improvements are applied.
 The files in this repository are licensed under AGPLv3. For third parties' programs, see corresponding directories under /thirdparties.
 If you need the commercial license for our AGPLv3 parts, please contact to oveus@axell.co.jp
 
 **CAUTION:** TRADEMARKS INCLUDING THE NAME "oveus" ARE NOT LICENSED.
+
+## Place of the codes for papers
+
+### Towards Better Standard Cell Library: Optimizing Compound Logic Gates for TFHE
+
+paper: https://dl.acm.org/doi/10.1145/3474366.3486927
+
+See the codes in `src/axell/gate.cpp`.
+
+### Multiplicative Integer Division over Integer-wise TFHE
+
+paper: https://tches.iacr.org/index.php/TCHES/article/view/13240
+
+See the codes under `include/axell/integer-wise/`. The division algorithms resides in `include/axell/integer-wise/div/`.
+
+Lean codes for the correctness proof of the division algorithms are placed in `scripts/lean/`.
+
+See `docs/IntegerDivisionOfTFHE.md` for how to run benchmarks and Lean compile. 
 
 ## Patents
 This repository contains some codes implementing the contents of AXELL CORPORATION's patents.

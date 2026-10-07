@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <type_traits>
 
 #include "bfv/bfv-multilimb.hpp"
 #include "cuhe++.hpp"
@@ -31,6 +32,8 @@ enum class ErrorDistribution { ModularGaussian, CenteredBinomial };
 #include "params/tfhe-rs.hpp"
 #elif defined(USE_TERNARY)
 #include "params/ternary.hpp"
+#elif defined(USE_DIVISION_BENCH)
+#include "params/division-bench.hpp"
 #else
 #include "params/128bit.hpp"
 // The extended scheme scaffolds (BFV bootstrapping, CLPX scheme switching,
@@ -50,7 +53,9 @@ using cblvl2param = lvl2param;
 using cbAHlvl2param = AHlvl2param;
 #endif
 
+#ifndef USE_DIVISION_BENCH
 using ckkslvl3param = lvl3simdparam;
+#endif
 
 struct lvl01param {
     using domainP = lvl0param;
@@ -101,6 +106,10 @@ struct lvlh2param {
     static constexpr uint32_t Addends = 1;
 #endif
 };
+
+#ifdef ENABLE_AXELL
+#include "axell/intparam.hpp"
+#endif
 
 struct cblvl02param {
     using domainP = lvl0param;
@@ -340,6 +349,14 @@ using relinKeyFFT = aligned_array<TRLWEInFD<P>, P::l * P::l̅>;
     fun(lvl21param);
 #define TFHEPP_EXPLICIT_INSTANTIATION_SUBSET_KEY_SWITCH_TO_TRLWE(fun) \
     fun(lvl21param);
+#ifdef ENABLE_AXELL
+#define TFHEPP_EXPLICIT_INSTANTIATION_INTADD(fun) \
+    fun(lvlh2param, lvl2hparam, intparam);
+#define TFHEPP_EXPLICIT_INSTANTIATION_INTMUL(fun) \
+    fun(lvlh2param, lvl2hparam, intparam);
+#define TFHEPP_EXPLICIT_INSTANTIATION_INTMUL_AH(fun) \
+    fun(lvlh2param, lvl2hparam, AHlvl2param, intparam);
+#endif
 #define TFHEPP_EXPLICIT_INSTANTIATION_GATE_IKSBR(fun) \
     fun(lvl10param, lvl01param, lvl1param::μ);
 #define TFHEPP_EXPLICIT_INSTANTIATION_GATE_BRIKS(fun) \

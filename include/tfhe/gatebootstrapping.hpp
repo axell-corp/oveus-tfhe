@@ -373,6 +373,36 @@ void GateBootstrappingManyLUT(
         SampleExtractIndex<typename P::targetP>(res[i], acc, i);
 }
 
+// Compatibility entry points used by the integer-wise implementation.
+template <class P>
+void GateBootstrappingTLWE2TLWEFFTfunc(
+    TLWE<typename P::targetP> &res, const TLWE<typename P::domainP> &tlwe,
+    const BootstrappingKeyFFT<P> &bkfft,
+    const TRLWE<typename P::targetP> &testvector)
+{
+    TRLWE<typename P::targetP> acc;
+    BlindRotate<P>(acc, tlwe, bkfft, testvector);
+    SampleExtractIndex<typename P::targetP>(res, acc, 0);
+}
+
+template <class P>
+inline void GateBootstrappingTLWE2TLWEFFT(
+    TLWE<typename P::targetP> &res, const TLWE<typename P::domainP> &tlwe,
+    const BootstrappingKeyFFT<P> &bkfft,
+    const Polynomial<typename P::targetP> &testvector)
+{
+    GateBootstrappingTLWE2TLWE<P>(res, tlwe, bkfft, testvector);
+}
+
+template <class P>
+inline void GateBootstrappingTLWE2TLWEFFT(
+    TLWE<typename P::targetP> &res, const TLWE<typename P::domainP> &tlwe,
+    const BootstrappingKeyFFT<P> &bkfft,
+    const TRLWE<typename P::targetP> &testvector)
+{
+    GateBootstrappingTLWE2TLWE<P>(res, tlwe, bkfft, testvector);
+}
+
 template <class P, uint32_t num_out>
 void GateBootstrappingManyLUT(
     std::array<TLWE<typename P::targetP>, num_out> &res,

@@ -16,6 +16,7 @@ option(USE_BLOCK_BINARY "Use Concrete-based parameters with block-binary lvl0 ke
 option(USE_CONCRETE "Use the parameter set proposed in CONCRETE" OFF)
 option(USE_TFHE_RS "Use the parameter set proposed in TFHE-rs" OFF)
 option(USE_TERNARY "Use ternary secret keys" OFF)
+option(USE_DIVISION_BENCH "Use the IntegerDivisionOfTFHE benchmark parameters" OFF)
 option(USE_COMPRESS "Use compressed ciphertexts" OFF)
 option(USE_SUBSET_KEY "Use subset key" OFF)
 
@@ -89,6 +90,10 @@ option(USE_PERF "Use Google Profiler" OFF)
 
 option(ENABLE_SHARED "Build as shared libraries" OFF)
 
+if(USE_DIVISION_BENCH AND NOT ENABLE_AXELL)
+  message(FATAL_ERROR "USE_DIVISION_BENCH requires ENABLE_AXELL=ON")
+endif()
+
 set(TFHEpp_DEFINITIONS
     ""
     PARENT_SCOPE)
@@ -125,6 +130,8 @@ elseif(USE_TFHE_RS)
   add_compile_definitions(USE_TFHE_RS)
 elseif(USE_TERNARY)
   add_compile_definitions(USE_TERNARY)
+elseif(USE_DIVISION_BENCH)
+  add_compile_definitions(USE_DIVISION_BENCH)
 endif()
 
 if(USE_SUBSET_KEY)

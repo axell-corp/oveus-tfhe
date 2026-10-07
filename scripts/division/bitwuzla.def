@@ -1,0 +1,15 @@
+BootStrap: docker
+From: ubuntu:24.04
+
+%post
+	apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
+    DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential git cmake bison flex libboost-all-dev libgmp-dev perl ninja-build meson python3 libgmp-dev python3-pip libreadline-dev libtinfo-dev python3-numpy
+	git clone --recursive --depth 1 https://github.com/nindanaoto/bitwuzla.git -b ae_kissat2025_mab /bitwuzla
+	pip3 install pysmt --break-system-package
+	cd /bitwuzla
+	pip3 install cython meson-python --break-system-package
+	CXXFLAGS='-march=native' CFLAGS='-march=native' ./configure.py release --ae_kissat
+	cd build
+	ninja
+	ninja install

@@ -1,0 +1,98 @@
+Bootstrap: docker
+From: ubuntu:24.04
+
+# Build from scripts/lean:
+#   apptainer build --fakeroot lean.sif lean.def
+# Run both bundled proofs:
+#   apptainer run lean.sif
+# Run one proof or pass custom Lean arguments:
+#   apptainer run lean.sif LUTNR.lean
+#   apptainer run lean.sif --version
+
+%labels
+    Description Lean 4.34.1 + mathlib runner for ReducedNR.lean and LUTNR.lean
+
+%environment
+    export ELAN_HOME="/opt/elan"
+    export PATH="${ELAN_HOME}/bin:${PATH}"
+    export LEAN_WORKSPACE="/opt/lean-runner/reciprocal_runner"
+
+%files
+    ReducedNR.lean /opt/lean-script/ReducedNR.lean
+    LUTNR.lean /opt/lean-script/LUTNR.lean
+    ProofAudit.lean /opt/lean-script/ProofAudit.lean
+
+%post
+    set -eux
+
+    export DEBIAN_FRONTEND=noninteractive
+    export ELAN_HOME="/opt/elan"
+    export PATH="${ELAN_HOME}/bin:${PATH}"
+    export HOME="/root"
+    export LEAN_BOOTSTRAP="/opt/lean-runner"
+
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        git \
+        xz-utils \
+        zstd
+    rm -rf /var/lib/apt/lists/*
+
+    curl --proto '=https' --tlsv1.2 -sSf \
+        https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+        | sh -s -- -y --default-toolchain none --no-modify-path
+
+    elan toolchain install v4.34.1
+
+    mkdir -p "${LEAN_BOOTSTRAP}"
+    cd "${LEAN_BOOTSTRAP}"
+    lake +v4.34.1 new reciprocal_runner math
+
+    cp /opt/lean-script/ReducedNR.lean /opt/lean-script/LUTNR.lean \
+        /opt/lean-script/ProofAudit.lean \
+        "${LEAN_BOOTSTRAP}/reciprocal_runner/"
+
+    cd "${LEAN_BOOTSTRAP}/reciprocal_runner"
+    lake exe cache get
+    mkdir -p .lake/build/lib/lean
+    lake env lean -o .lake/build/lib/lean/ReducedNR.olean ReducedNR.lean
+    lake env lean -o .lake/build/lib/lean/LUTNR.olean LUTNR.lean
+    lake env lean ProofAudit.lean
+
+%runscript
+    set -eu
+
+    export ELAN_HOME="/opt/elan"
+    export PATH="${ELAN_HOME}/bin:${PATH}"
+    export LEAN_WORKSPACE="/opt/lean-runner/reciprocal_runner"
+
+    cd "${LEAN_WORKSPACE}"
+
+    if [ "$#" -eq 0 ]; then
+        lake env lean ReducedNR.lean
+        lake env lean LUTNR.lean
+        exec lake env lean ProofAudit.lean
+    fi
+
+    exec lake env lean "$@"
+
+%help
+    Builds a small Lean + mathlib environment around the bundled
+    ReducedNR.lean and LUTNR.lean scripts and typechecks both.
+    ProofAudit.lean rejects sorryAx, compiler-trust axioms, and custom axioms;
+    only propext, Classical.choice, and Quot.sound are allowed. The theorems
+    retain their stated input hypotheses, including LUTNR ApproxHyp.
+
+    Build from scripts/lean:
+        apptainer build --fakeroot lean.sif lean.def
+
+    Run both bundled proofs:
+        apptainer run lean.sif
+
+    Pass explicit Lean arguments:
+        apptainer run lean.sif --version
+        apptainer run lean.sif ReducedNR.lean
+        apptainer run lean.sif LUTNR.lean

@@ -165,6 +165,7 @@ TFHEPP_EXPLICIT_INSTANTIATION_ANNIHILATE(INST)
 #undef INST
 
 // Explicit template instantiations for get<T>() helper functions
+#ifndef USE_DIVISION_BENCH
 #define INST(P) template auto& EvalKey::get<BootstrappingKey<P>>()
 TFHEPP_EXPLICIT_INSTANTIATION_BLIND_ROTATE(INST)
 #undef INST
@@ -176,6 +177,7 @@ TFHEPP_EXPLICIT_INSTANTIATION_BLIND_ROTATE(INST)
 #define INST(P) template auto& EvalKey::get<BootstrappingKeyNTT<P>>()
 TFHEPP_EXPLICIT_INSTANTIATION_BLIND_ROTATE(INST)
 #undef INST
+#endif
 
 #ifdef USE_COMPRESS
 #define INST(P) template auto& EvalKey::get<BootstrappingKeyRAINTT<P>>()

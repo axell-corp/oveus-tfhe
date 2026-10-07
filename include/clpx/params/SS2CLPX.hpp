@@ -52,4 +52,15 @@ struct SS2CLPXlvl22param {
 
 }  // namespace TFHEpp
 
+#else
+
+namespace TFHEpp {
+
+// cloudkey.hpp mentions these optional key types in constexpr branches.  The
+// division benchmark does not instantiate CLPX keys, so declarations suffice.
+struct SS2CLPXlvl02param;
+struct SS2CLPXlvlh2param;
+
+}  // namespace TFHEpp
+
 #endif  // TFHEPP_DEFAULT_128BIT_PARAMS

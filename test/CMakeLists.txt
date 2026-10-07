@@ -19,7 +19,8 @@ if(USE_80BIT_SECURITY
    OR USE_BLOCK_BINARY
    OR USE_CONCRETE
    OR USE_TFHE_RS
-   OR USE_TERNARY)
+   OR USE_TERNARY
+   OR USE_DIVISION_BENCH)
     set(default_parameter_set OFF)
 endif()
 
@@ -33,6 +34,9 @@ foreach(test_source ${test_sources})
         if(test_name STREQUAL "tfhe_integer")
             continue()
         endif()
+    endif()
+    if(test_dir MATCHES "^axell/" AND NOT USE_DIVISION_BENCH)
+        continue()
     endif()
     if((test_name STREQUAL "blockbinary_blindrotatefft" OR
         test_name STREQUAL "blockbinary_nand") AND NOT USE_BLOCK_BINARY)
@@ -89,6 +93,15 @@ foreach(test_source ${test_sources})
         list(APPEND test_${test_dir}_targets ${test_name})
     endif()
 endforeach(test_source ${test_sources})
+
+if(USE_DIVISION_BENCH)
+    add_custom_target(integer_division_benchmarks DEPENDS
+        bench_br hfp_bench
+        longmul longmull ulshift clz
+        intdivnr intdivnr32 intdivnr_par
+        intdivreducednr intdivreducednr32 intdivreducednr_par
+        intdivlutnr intdivlutnr32 intdivlutnr_par)
+endif()
 
 foreach(test_dir ${test_directories})
     set(test_targets_var "test_${test_dir}_targets")
