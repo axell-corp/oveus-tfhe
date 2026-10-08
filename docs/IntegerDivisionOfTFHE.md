@@ -13,6 +13,7 @@ cmake -S . -B build-integer-division \
   -DCMAKE_BUILD_TYPE=Release \
   -DENABLE_TEST=ON \
   -DENABLE_AXELL=ON \
+  -DUSE_SPQLIOS_INTL=OFF \
   -DUSE_DIVISION_BENCH=ON
 
 cmake --build build-integer-division \
